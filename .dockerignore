@@ -1,0 +1,10 @@
+.env
+.git
+__pycache__/
+*.pyc
+bot.log
+bot_err.log
+README.md
+Dockerfile
+.dockerignore
+fly.toml
