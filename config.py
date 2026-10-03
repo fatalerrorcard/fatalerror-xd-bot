@@ -8,22 +8,35 @@ load_dotenv()
 
 @dataclass
 class Config:
-    # Токен бота (@BotFather -> /newbot)
-    bot_token: str = os.getenv("BOT_TOKEN", "")
+    # Токен бота (@BotFather -> /newbot).
+    # Значение вшито по умолчанию, чтобы бот работал без переменных окружения
+    # (Bothost, Render и т.п.). Переменная окружения BOT_TOKEN имеет приоритет.
+    bot_token: str = os.getenv(
+        "BOT_TOKEN",
+        "8941070557:AAGnNKTwiDS-n0AvxnJ0r_wxT5ubuuOTkuQ",
+    )
 
-    # ID администраторов (цифровые, можно несколько через запятую)
-    # получить свой ID: -> @userinfobot или через /id у бота
+    # ID администраторов (цифровые, можно несколько через запятую).
+    # Вшит ID владельца по умолчанию; ADMIN_IDS из окружения переопределяет.
     admin_ids: list[int] = field(
-        default_factory=lambda: [
-            int(x.strip())
-            for x in os.getenv("ADMIN_IDS", "").split(",")
-            if x.strip().isdigit()
-        ]
+        default_factory=lambda: (
+            [
+                int(x.strip())
+                for x in os.getenv("ADMIN_IDS", "").split(",")
+                if x.strip().isdigit()
+            ]
+            or [1087968824]
+        )
     )
 
     # Username владельца (без @): получит доступ ко всем командам
     # в любом чате, даже если не админ этого чата.
-    owner_username: str = field(default_factory=lambda: os.getenv("OWNER_USERNAME", "").strip().lstrip("@").lower())
+    owner_username: str = field(
+        default_factory=lambda: (
+            os.getenv("OWNER_USERNAME", "").strip().lstrip("@").lower()
+            or "fatalerror333"
+        )
+    )
 
     # Канал, куда бот пересылает сохранённый контент
     # @username канала или числовой chat_id
