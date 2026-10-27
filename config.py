@@ -58,6 +58,10 @@ class Config:
     caption_max_len: int = int(os.getenv("CAPTION_MAX_LEN", "500"))
 
     # ===== Модерация =====
+    # Флуд-защита ВЫКЛЮЧЕНА по умолчанию (не удаляет и не мутит, не чистит чат).
+    # Чтобы включить поведение "удалять + мутить", поставьте FLOOD_ENABLED=1
+    # в переменных окружения на хостинге.
+    flood_enabled: bool = os.getenv("FLOOD_ENABLED", "0") == "1"
     flood_trigger: int = int(os.getenv("FLOOD_TRIGGER", "4"))       # сообщений за окно
     flood_window_sec: int = int(os.getenv("FLOOD_WINDOW_SEC", "6")) # окно, сек
     flood_mute_min: int = int(os.getenv("FLOOD_MUTE_MIN", "10"))    # мут за флуд, мин
