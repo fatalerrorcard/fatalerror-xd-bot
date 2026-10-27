@@ -27,12 +27,21 @@ def _is_flood(user_id: int) -> bool:
 
 @router.message(Command("floodtest"))
 async def _flood_test(message: types.Message):
-    # служебная: чтобы проверить логику, не вызывая реальный мут
-    await message.reply(f"окно={config.flood_window_sec}, порог={config.flood_trigger}")
+    # служебная: посмотреть настройки флуд-защиты
+    state = "ВКЛЮЧЕНА" if config.flood_enabled else "ВЫКЛЮЧЕНА (бот не удаляет и не мутит)"
+    await message.reply(
+        f"Флуд-защита: {state}\n"
+        f"окно={config.flood_window_sec} сек, порог={config.flood_trigger}, "
+        f"мут={config.flood_mute_min} мин"
+    )
 
 
 @router.message()
 async def flood_check(message: types.Message):
+    # Флуд-защита отключена по умолчанию (FLOOD_ENABLED=0).
+    # Она НЕ должна удалять сообщения и мутить участников "просто так".
+    if not config.flood_enabled:
+        return
     chat = message.chat
     if chat.type == "private":
         return
