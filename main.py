@@ -15,6 +15,7 @@ from aiogram.filters import Command
 from aiogram.types import Message
 
 import antispam
+import ranks
 from config import config
 from moderation import (
     ban_user,
@@ -110,6 +111,69 @@ def owner_only(func):
     return wrapper
 
 
+# ---------- Ранги: уровни и права ----------
+
+# Какой ранг нужен для действия (для текста отказа)
+_NEED_TITLE = {
+    "delete": "младшего модера",
+    "mute": "младшего модера",
+    "unmute": "старшего модера",
+    "ban": "старшего модера",
+    "unban": "старшего модера",
+    "kick": "старшего модера",
+    "pin": "старшего модера",
+    "assign_moderator": "младшего админа",
+    "assign_junior_admin": "старшего админа",
+    "assign_senior_admin": "владельца",
+}
+
+
+async def effective_level(message: Message) -> int:
+    """Уровень пользователя: 0 — нет прав, 1–4 — ранги, 5 — владелец."""
+    user = message.from_user
+    if not user:
+        return 0
+    # Владелец по username
+    if (
+        user.username
+        and config.owner_username
+        and user.username.lower() == config.owner_username
+    ):
+        return ranks.OWNER_LEVEL
+    # Глобальные админы из ADMIN_IDS
+    if user.id in OWNERS:
+        return ranks.OWNER_LEVEL
+    if message.chat.type in ("group", "supergroup"):
+        owner = await get_chat_owner(message.bot, message.chat.id)
+        if owner is not None and user.id == owner:
+            return ranks.OWNER_LEVEL
+        return ranks.rank_level(ranks.get_rank(message.chat.id, user.id))
+    return 0
+
+
+async def has_perm(message: Message, perm: str) -> bool:
+    need = ranks.PERM_LEVELS.get(perm, 99)
+    return await effective_level(message) >= need
+
+
+async def _require(message: Message, perm: str) -> bool:
+    if await has_perm(message, perm):
+        return True
+    await message.reply(
+        f"Нет прав: нужен ранг не ниже {_NEED_TITLE.get(perm, 'старшего модера')}."
+    )
+    return False
+
+
+def _resolve_target(message: Message, parts: list[str], index: int) -> int | None:
+    """Кому назначаем: ответ на сообщение или числовой ID."""
+    if message.reply_to_message and message.reply_to_message.from_user:
+        return message.reply_to_message.from_user.id
+    if len(parts) > index and parts[index].isdigit():
+        return int(parts[index])
+    return None
+
+
 async def _ensure_admin(message: Message) -> tuple[bool, str]:
     """Проверяет, что сообщение из группового чата, где бот - админ."""
     if message.chat.type not in ("group", "supergroup"):
@@ -129,7 +193,9 @@ async def cmd_start(message: Message):
         log.info("Запомнен user_id владельца: %s", user.id)
     txt = (
         "Бот управления чатами.\n"
-        "Групповые команды (бой должен быть админом):\n"
+        "Ранги: /ranks · мой ранг: /rank · выдать: /setrank (ответом) <ранг>\n"
+        "  ранги: модер, стмодер, младший админ, старший админ\n"
+        "Групповые команды (бот должен быть админом):\n"
         "  /ban [ответ] — бан · /unban — снять бан\n"
         "  /kick [ответ] — исключить · /mute 30 — мут 30 мин\n"
         "  /unmute — снять мут · /clear, /delete — удалить ответное сообщение\n"
@@ -163,8 +229,8 @@ async def cmd_id(message: Message):
 
 @router.message(Command("ban"))
 async def cmd_ban(message: Message):
-    if not await _is_owner(message):
-        return await message.reply("Нет прав.")
+    if not await _require(message, "ban"):
+        return
     ok, err = await _ensure_admin(message)
     if not ok:
         return await message.reply(err)
@@ -176,15 +242,15 @@ async def cmd_ban(message: Message):
             message.chat.id,
             message.reply_to_message.from_user.id,
         )
-        await message.reply(res + " Управляется админами.")
+        await message.reply(res)
     except Exception as e:  # noqa: BLE001
         await message.reply(f"Ошибка: {e}")
 
 
 @router.message(Command("unban"))
 async def cmd_unban(message: Message):
-    if not await _is_owner(message):
-        return await message.reply("Нет прав.")
+    if not await _require(message, "unban"):
+        return
     ok, err = await _ensure_admin(message)
     if not ok:
         return await message.reply(err)
@@ -200,8 +266,8 @@ async def cmd_unban(message: Message):
 
 @router.message(Command("kick"))
 async def cmd_kick(message: Message):
-    if not await _is_owner(message):
-        return await message.reply("Нет прав.")
+    if not await _require(message, "kick"):
+        return
     ok, err = await _ensure_admin(message)
     if not ok:
         return await message.reply(err)
@@ -218,8 +284,8 @@ async def cmd_kick(message: Message):
 
 @router.message(Command("mute"))
 async def cmd_mute(message: Message):
-    if not await _is_owner(message):
-        return await message.reply("Нет прав.")
+    if not await _require(message, "mute"):
+        return
     ok, err = await _ensure_admin(message)
     if not ok:
         return await message.reply(err)
@@ -238,8 +304,8 @@ async def cmd_mute(message: Message):
 
 @router.message(Command("unmute"))
 async def cmd_unmute(message: Message):
-    if not await _is_owner(message):
-        return await message.reply("Нет прав.")
+    if not await _require(message, "unmute"):
+        return
     ok, err = await _ensure_admin(message)
     if not ok:
         return await message.reply(err)
@@ -256,8 +322,8 @@ async def cmd_unmute(message: Message):
 
 @router.message(Command("clear", "delete"))
 async def cmd_clear(message: Message):
-    if not await _is_owner(message):
-        return await message.reply("Нет прав.")
+    if not await _require(message, "delete"):
+        return
     ok, err = await _ensure_admin(message)
     if not ok:
         return await message.reply(err)
@@ -272,8 +338,8 @@ async def cmd_clear(message: Message):
 
 @router.message(Command("pin"))
 async def cmd_pin(message: Message):
-    if not await _is_owner(message):
-        return await message.reply("Нет прав.")
+    if not await _require(message, "pin"):
+        return
     ok, err = await _ensure_admin(message)
     if not ok:
         return await message.reply(err)
@@ -288,8 +354,8 @@ async def cmd_pin(message: Message):
 
 @router.message(Command("unpin"))
 async def cmd_unpin(message: Message):
-    if not await _is_owner(message):
-        return await message.reply("Нет прав.")
+    if not await _require(message, "pin"):
+        return
     ok, err = await _ensure_admin(message)
     if not ok:
         return await message.reply(err)
@@ -300,6 +366,119 @@ async def cmd_unpin(message: Message):
         await message.reply(res)
     except Exception as e:  # noqa: BLE001
         await message.reply(f"Ошибка: {e}")
+
+
+# ---------- Ранги ----------
+
+@router.message(Command("ranks"))
+async def cmd_ranks(message: Message):
+    await message.reply(
+        "Иерархия рангов (от высшего к низшему):\n" + ranks.hierarchy_text()
+    )
+
+
+@router.message(Command("rank"))
+async def cmd_rank(message: Message):
+    user = message.from_user
+    if not user:
+        return
+    lvl = await effective_level(message)
+    if lvl == ranks.OWNER_LEVEL:
+        title = ranks.OWNER_TITLE
+    elif message.chat.type in ("group", "supergroup"):
+        title = ranks.rank_title(ranks.get_rank(message.chat.id, user.id))
+    else:
+        title = "—"
+    await message.reply(f"Ваш ранг: {title} (уровень {lvl})")
+
+
+@router.message(Command("setrank"))
+async def cmd_setrank(message: Message):
+    parts = (message.text or "").split()
+    reply = message.reply_to_message
+    if reply and reply.from_user:
+        if len(parts) < 2:
+            return await message.reply(
+                "Укажите ранг ответом на сообщение: /setrank модер"
+            )
+        rank_raw = " ".join(parts[1:])
+        target = reply.from_user.id
+    else:
+        if len(parts) < 3 or not parts[1].isdigit():
+            return await message.reply(
+                "Формат: /setrank <ID> <ранг> или ответом: /setrank <ранг>\n"
+                "Ранги: модер, стмодер, младший админ, старший админ"
+            )
+        target = int(parts[1])
+        rank_raw = " ".join(parts[2:])
+
+    rank = ranks.normalize_rank(rank_raw)
+    if not rank or rank == "owner":
+        return await message.reply(
+            "Неизвестный ранг. Доступно: модер, стмодер, младший админ, старший админ."
+        )
+
+    perm = ranks.assign_perm_for(rank)
+    if not perm or not await has_perm(message, perm):
+        return await message.reply("Нет прав на выдачу этого ранга.")
+
+    my_level = await effective_level(message)
+    target_level = ranks.rank_level(ranks.get_rank(message.chat.id, target))
+    new_level = ranks.rank_level(rank)
+    if my_level < ranks.OWNER_LEVEL:
+        if target_level >= my_level:
+            return await message.reply("Нельзя менять ранг равному или старшему.")
+        if new_level >= my_level:
+            return await message.reply("Нельзя выдать ранг не ниже своего.")
+
+    ranks.set_rank(message.chat.id, target, rank)
+    await message.reply(
+        f"Пользователю {target} выдан ранг «{ranks.rank_title(rank)}»."
+    )
+
+
+@router.message(Command("unrank"))
+async def cmd_unrank(message: Message):
+    parts = (message.text or "").split()
+    if message.reply_to_message and message.reply_to_message.from_user:
+        target = message.reply_to_message.from_user.id
+    elif len(parts) > 1 and parts[1].isdigit():
+        target = int(parts[1])
+    else:
+        return await message.reply(
+            "Ответьте на сообщение пользователя или укажите ID: /unrank <ID>"
+        )
+
+    my_level = await effective_level(message)
+    if my_level < ranks.PERM_LEVELS["assign_moderator"]:
+        return await message.reply("Нет прав: нужен ранг не ниже младшего админа.")
+
+    target_level = ranks.rank_level(ranks.get_rank(message.chat.id, target))
+    if my_level < ranks.OWNER_LEVEL and target_level >= my_level:
+        return await message.reply("Нельзя снять ранг равному или старшему.")
+
+    ranks.set_rank(message.chat.id, target, None)
+    await message.reply("Ранг снят.")
+
+
+@router.message(Command("ranklist", "rlist"))
+async def cmd_ranklist(message: Message):
+    if message.chat.type not in ("group", "supergroup"):
+        return await message.reply("Команда работает только в группе.")
+    data = ranks.chat_ranks(message.chat.id)
+    if not data:
+        return await message.reply("В этом чате ранги никому не выданы.")
+    ordered = sorted(data.items(), key=lambda kv: -ranks.rank_level(kv[1]))
+    lines = []
+    for uid, rank in ordered:
+        name = str(uid)
+        try:
+            member = await message.bot.get_chat_member(message.chat.id, uid)
+            name = member.user.full_name or member.user.username or str(uid)
+        except Exception:  # noqa: BLE001
+            pass
+        lines.append(f"• {name} — {ranks.rank_title(rank)}")
+    await message.reply("Ранги в чате:\n" + "\n".join(lines))
 
 
 # ---------- Работа со списком чатов для сохранения ----------
