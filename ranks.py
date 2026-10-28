@@ -11,8 +11,7 @@
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
+import storage
 
 # Порядок от младшего к старшему
 RANKS: dict[str, dict] = {
@@ -70,24 +69,15 @@ PERM_LEVELS: dict[str, int] = {
     "assign_senior_admin": 5,
 }
 
-_STORE = Path(__file__).with_name("ranks.json")
+_FILE = "ranks.json"
 
 
 def _load() -> dict:
-    try:
-        with open(_STORE, encoding="utf-8") as f:
-            data = json.load(f)
-            return data if isinstance(data, dict) else {}
-    except Exception:  # noqa: BLE001
-        return {}
+    return storage.load(_FILE, {})
 
 
 def _save(data: dict) -> None:
-    try:
-        with open(_STORE, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-    except Exception:  # noqa: BLE001
-        pass
+    storage.save(_FILE, data)
 
 
 def normalize_rank(name: str) -> str | None:
