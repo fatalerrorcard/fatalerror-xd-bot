@@ -65,6 +65,12 @@ class Config:
     flood_trigger: int = int(os.getenv("FLOOD_TRIGGER", "4"))       # сообщений за окно
     flood_window_sec: int = int(os.getenv("FLOOD_WINDOW_SEC", "6")) # окно, сек
     flood_mute_min: int = int(os.getenv("FLOOD_MUTE_MIN", "10"))    # мут за флуд, мин
+
+    # ===== Предупреждения (варны) =====
+    # Сколько активных варнов до бана
+    warn_limit: int = int(os.getenv("WARN_LIMIT", "3"))
+    # Срок действия варна по умолчанию, дней
+    warn_ttl_days: int = int(os.getenv("WARN_TTL_DAYS", "7"))
     welcome_enabled: bool = os.getenv("WELCOME_ENABLED", "1") == "1"
     welcome_text: str = os.getenv(
         "WELCOME_TEXT",
