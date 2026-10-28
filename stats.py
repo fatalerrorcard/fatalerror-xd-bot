@@ -6,18 +6,19 @@
 
 from __future__ import annotations
 
-import json
+import time
 from datetime import date, timedelta
-from pathlib import Path
 from typing import Any
 
 from aiogram import BaseMiddleware, Router, types
 from aiogram.filters import Command
 from aiogram.types import Message
 
+import storage
+
 router = Router(name="stats")
 
-_STORE = Path(__file__).with_name("stats.json")
+_FILE = "stats.json"
 _PRUNE_DAYS = 40      # сколько дней хранить дневные счётчики
 _SAVE_EVERY = 20      # сохранять на диск раз в N сообщений
 
@@ -26,20 +27,11 @@ _dirty = 0
 
 
 def _load() -> dict:
-    try:
-        with open(_STORE, encoding="utf-8") as f:
-            data = json.load(f)
-            return data if isinstance(data, dict) else {}
-    except Exception:  # noqa: BLE001
-        return {}
+    return storage.load(_FILE, {})
 
 
 def _save(data: dict) -> None:
-    try:
-        with open(_STORE, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
-    except Exception:  # noqa: BLE001
-        pass
+    storage.save(_FILE, data)
 
 
 def _get_data() -> dict:
@@ -86,8 +78,10 @@ def record(message: Message) -> None:
     chat = data.setdefault(str(message.chat.id), {})
     rec = chat.setdefault(
         str(user.id),
-        {"name": "", "username": "", "total": 0, "days": {}},
+        {"name": "", "username": "", "total": 0, "days": {}, "first": 0},
     )
+    if not rec.get("first"):
+        rec["first"] = time.time()
     if user.full_name:
         rec["name"] = user.full_name
     if user.username:
@@ -147,6 +141,31 @@ def top(chat_id: int, period: str = "all", limit: int = 10) -> list[dict]:
         )
     rows.sort(key=lambda r: (-r["count"], r["name"].lower()))
     return rows[:limit]
+
+
+def user_summary(chat_id: int, user_id: int) -> dict:
+    """Сводка по пользователю: всего, за день, за неделю, первое сообщение."""
+    chat = _get_data().get(str(chat_id), {})
+    rec = chat.get(str(user_id), {})
+    if not isinstance(rec, dict):
+        rec = {}
+    days = rec.get("days", {})
+    if not isinstance(days, dict):
+        days = {}
+    today = date.today()
+    day_count = int(days.get(today.isoformat(), 0))
+    week_count = sum(
+        int(days.get((today - timedelta(days=i)).isoformat(), 0))
+        for i in range(7)
+    )
+    return {
+        "total": int(rec.get("total", 0)),
+        "day": day_count,
+        "week": week_count,
+        "first": float(rec.get("first", 0) or 0),
+        "name": rec.get("name") or "",
+        "username": rec.get("username") or "",
+    }
 
 
 def _display(row: dict) -> str:
