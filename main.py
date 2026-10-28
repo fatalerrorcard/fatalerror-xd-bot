@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from functools import wraps
 
@@ -194,15 +195,12 @@ async def cmd_start(message: Message):
         log.info("Запомнен user_id владельца: %s", user.id)
     txt = (
         "Бот управления чатами.\n"
+        "Команды можно писать без слэша, по-русски:\n"
+        "  бан · разбан · кик · мут 30 · размут · удалить\n"
+        "  закрепить · открепить · топ · топ день · топ неделя\n"
+        "  мой ранг · ранги · выдать стмодер (ответом) · снять ранг\n"
         "Ранги: /ranks · мой ранг: /rank · выдать: /setrank (ответом) <ранг>\n"
         "  ранги: модер, стмодер, младший админ, старший админ\n"
-        "Групповые команды (бот должен быть админом):\n"
-        "  /ban [ответ] — бан · /unban — снять бан\n"
-        "  /kick [ответ] — исключить · /mute 30 — мут 30 мин\n"
-        "  /unmute — снять мут · /clear, /delete — удалить ответное сообщение\n"
-        "  /pin — закрепить (ответ) · /unpin — открепить\n"
-        "Статистика:\n"
-        "  /топ — топ за всё время · /топ день · /топ неделя · /я — своя статистика\n"
         "Сохранение контента:\n"
         "  /watch — добавить чат в автосохранение\n"
         "  /unwatch — убрать чат\n"
@@ -600,6 +598,50 @@ async def bot_added_to_chat(event: types.ChatMemberUpdated):
         log.info("Приветствие отправлено в чат %s", chat.id)
     except Exception as e:  # noqa: BLE001
         log.warning("Не удалось отправить приветствие: %s", e)
+
+
+# ---------- Команды без слэша, по-русски ----------
+# Работают как обычный текст: "бан", "мут 30", "топ неделя" и т.д.
+# Требуют, чтобы у бота был ВЫКЛЮЧЕН режим приватности в @BotFather.
+
+_RU_COMMANDS: list[tuple[re.Pattern[str], object]] = [
+    (re.compile(r"^(бан|забанить)$", re.I), cmd_ban),
+    (re.compile(r"^(разбан|унбан|разбанить)$", re.I), cmd_unban),
+    (re.compile(r"^(кик|выгнать|исключить)$", re.I), cmd_kick),
+    (re.compile(r"^мут(\s+\d+)?$", re.I), cmd_mute),
+    (re.compile(r"^(размут|унмут|снять мут)$", re.I), cmd_unmute),
+    (re.compile(r"^(удалить|удали|удаление|чистить|очистить)$", re.I), cmd_clear),
+    (re.compile(r"^(закрепить|закреп)$", re.I), cmd_pin),
+    (re.compile(r"^(открепить|откреп|снять закреп)$", re.I), cmd_unpin),
+    (
+        re.compile(
+            r"^топ(\s+(за\s+)?(день|дня|неделя|неделю|недели|все|всё|всего))?$",
+            re.I,
+        ),
+        stats.cmd_top,
+    ),
+    (
+        re.compile(r"^(моя статистика|мои сообщения|стата|моя стата)$", re.I),
+        stats.cmd_mystats,
+    ),
+    (re.compile(r"^(мой ранг|ранг)$", re.I), cmd_rank),
+    (re.compile(r"^(ранги|иерархия|список рангов)$", re.I), cmd_ranks),
+    (re.compile(r"^выдать\s+\S+$", re.I), cmd_setrank),
+    (re.compile(r"^(снять ранг|забрать ранг)$", re.I), cmd_unrank),
+    (re.compile(r"^(ранги чата|кто тут кто)$", re.I), cmd_ranklist),
+    (re.compile(r"^(помощь|команды|справка|help)$", re.I), cmd_start),
+]
+
+
+@router.message(F.text)
+async def ru_command(message: Message):
+    text = (message.text or "").strip()
+    if not text or text.startswith("/"):
+        return
+    for pattern, handler in _RU_COMMANDS:
+        if pattern.match(text):
+            await handler(message)
+            return
 
 
 async def main():
