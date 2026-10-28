@@ -13,7 +13,7 @@ from functools import wraps
 
 from aiogram import Bot, Dispatcher, F, Router, types
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import BotCommand, Message
 
 import antispam
 import ranks
@@ -185,7 +185,49 @@ async def _ensure_admin(message: Message) -> tuple[bool, str]:
     return True, ""
 
 
-@router.message(Command("start"))
+def help_text() -> str:
+    """Полный список всех команд бота."""
+    return (
+        "БОТ УПРАВЛЕНИЯ ЧАТАМИ\n"
+        "\n"
+        "Команды можно писать и со слэшем (/ban), и просто словом (бан).\n"
+        "\n"
+        "МОДЕРАЦИЯ (ответом на сообщение, бот должен быть админом):\n"
+        "  бан / забанить — забанить\n"
+        "  разбан — снять бан\n"
+        "  кик / выгнать — исключить\n"
+        "  мут / мут 30 — мут на N минут (по умолчанию 10)\n"
+        "  размут — снять мут\n"
+        "  удалить / удали — удалить сообщение\n"
+        "  закрепить / открепить — закреп и снятие закрепа\n"
+        "\n"
+        "РАНГИ:\n"
+        "  мой ранг — ваш ранг\n"
+        "  ранги — иерархия рангов\n"
+        "  выдать <ранг> — выдать ранг (ответом на сообщение)\n"
+        "      ранги: модер, стмодер, младший админ, старший админ\n"
+        "  снять ранг — забрать ранг (ответом)\n"
+        "  ранги чата — кто какой ранг имеет\n"
+        "\n"
+        "СТАТИСТИКА:\n"
+        "  топ — топ по сообщениям за всё время\n"
+        "  топ день — топ за сегодня\n"
+        "  топ неделя — топ за 7 дней\n"
+        "  моя статистика — ваша личная статистика\n"
+        "  /topreset — сброс статистики чата (старший админ)\n"
+        "\n"
+        "СОХРАНЕНИЕ КОНТЕНТА:\n"
+        "  /watch — добавить чат в автосохранение\n"
+        "  /unwatch — убрать чат\n"
+        "  /watchlist — список отслеживаемых чатов\n"
+        "\n"
+        "ПРОЧЕЕ:\n"
+        "  /id — ваш ID и ID чата\n"
+        "  помощь / команды — эта справка\n"
+    )
+
+
+@router.message(Command("start", "help"))
 async def cmd_start(message: Message):
     # Запоминаем user_id владельца при первом контакте
     user = message.from_user
@@ -193,22 +235,7 @@ async def cmd_start(message: Message):
         global _owner_user_id
         _owner_user_id = user.id
         log.info("Запомнен user_id владельца: %s", user.id)
-    txt = (
-        "Бот управления чатами.\n"
-        "Команды можно писать без слэша, по-русски:\n"
-        "  бан · разбан · кик · мут 30 · размут · удалить\n"
-        "  закрепить · открепить · топ · топ день · топ неделя\n"
-        "  мой ранг · ранги · выдать стмодер (ответом) · снять ранг\n"
-        "Ранги: /ranks · мой ранг: /rank · выдать: /setrank (ответом) <ранг>\n"
-        "  ранги: модер, стмодер, младший админ, старший админ\n"
-        "Сохранение контента:\n"
-        "  /watch — добавить чат в автосохранение\n"
-        "  /unwatch — убрать чат\n"
-        "  /watchlist — список отслеживаемых чатов\n"
-        "  /id — показать ваш ID и ID чата\n"
-        "Личка: /id, /watchlist, /watch <чат>"
-    )
-    await message.answer(txt, disable_web_page_preview=True)
+    await message.answer(help_text(), disable_web_page_preview=True)
 
 
 # ---------- Команды групповой модерации ----------
@@ -644,6 +671,32 @@ async def ru_command(message: Message):
             return
 
 
+# Меню команд в Telegram (кнопка "/")
+BOT_COMMANDS = [
+    BotCommand(command="start", description="Все команды бота"),
+    BotCommand(command="help", description="Список команд"),
+    BotCommand(command="top", description="Топ по сообщениям: всё / день / неделя"),
+    BotCommand(command="mystats", description="Моя статистика"),
+    BotCommand(command="rank", description="Мой ранг"),
+    BotCommand(command="ranks", description="Иерархия рангов"),
+    BotCommand(command="setrank", description="Выдать ранг (ответом)"),
+    BotCommand(command="unrank", description="Снять ранг"),
+    BotCommand(command="ranklist", description="Ранги в чате"),
+    BotCommand(command="ban", description="Забанить (ответом)"),
+    BotCommand(command="unban", description="Снять бан"),
+    BotCommand(command="kick", description="Исключить (ответом)"),
+    BotCommand(command="mute", description="Мут: /mute 30"),
+    BotCommand(command="unmute", description="Снять мут"),
+    BotCommand(command="delete", description="Удалить сообщение (ответом)"),
+    BotCommand(command="pin", description="Закрепить (ответом)"),
+    BotCommand(command="unpin", description="Открепить"),
+    BotCommand(command="watch", description="Добавить чат в автосохранение"),
+    BotCommand(command="unwatch", description="Убрать чат из автосохранения"),
+    BotCommand(command="watchlist", description="Чаты в автосохранении"),
+    BotCommand(command="id", description="Мой ID и ID чата"),
+]
+
+
 async def main():
     # Счётчик сообщений работает до хендлеров
     dp.message.outer_middleware(stats.StatsMiddleware())
@@ -652,6 +705,11 @@ async def main():
     dp.include_router(router)
     dp.include_router(antispam.router)
     await bot.delete_webhook(drop_pending_updates=True)
+    try:
+        await bot.set_my_commands(BOT_COMMANDS)
+        log.info("Меню команд обновлено.")
+    except Exception as e:  # noqa: BLE001
+        log.warning("Не удалось обновить меню команд: %s", e)
     log.info("Запуск бота...")
     try:
         await dp.start_polling(bot)
