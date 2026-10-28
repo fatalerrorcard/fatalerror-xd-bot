@@ -80,6 +80,10 @@ class Config:
     # Директория для сохранения файлов на диск (копия вместо пересылки)
     save_to_disk: str = os.getenv("SAVE_TO_DISK", "")
 
+    # Каталог состояния (ranks.json, warns.json, stats.json, settings.json).
+    # На хостинге с постоянным диском укажите путь к volume.
+    state_dir: str = os.getenv("STATE_DIR", "")
+
 
 config = Config()
 
