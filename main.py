@@ -9,14 +9,17 @@ import asyncio
 import logging
 import re
 import time
+from datetime import datetime
 from functools import wraps
 
 from aiogram import Bot, Dispatcher, F, Router, types
 from aiogram.filters import Command
 from aiogram.types import BotCommand, Message
 
+import actionlog
 import antispam
 import ranks
+import settings
 import stats
 import warns
 from config import config
@@ -177,6 +180,46 @@ def _resolve_target(message: Message, parts: list[str], index: int) -> int | Non
     return None
 
 
+def _reason(message: Message, skip: int = 1) -> str:
+    """Причина наказания: всё после первых `skip` слов команды."""
+    parts = (message.text or "").split(maxsplit=skip)
+    if len(parts) > skip:
+        return parts[skip].strip()
+    return ""
+
+
+def _parse_mute(message: Message) -> tuple[int, str]:
+    """'/mute 30 флуд' -> (30, 'флуд'); '/mute флуд' -> (10, 'флуд')."""
+    parts = (message.text or "").split(maxsplit=1)
+    rest = parts[1].strip() if len(parts) > 1 else ""
+    if not rest:
+        return 10, ""
+    m = re.match(r"^(\d+)\s*(.*)$", rest)
+    if m:
+        return int(m.group(1)), m.group(2).strip()
+    return 10, rest
+
+
+def _parse_warn(message: Message) -> tuple[int, str]:
+    """'/warn 1ч мат' -> (3600, 'мат'); без срока — стандартный."""
+    parts = (message.text or "").split(maxsplit=1)
+    rest = parts[1].strip() if len(parts) > 1 else ""
+    if not rest:
+        return 0, ""
+    first, _, tail = rest.partition(" ")
+    ttl = warns.parse_duration(first)
+    if ttl is not None:
+        return ttl, tail.strip()
+    return 0, rest
+
+
+async def _log(message: Message, action: str, text: str) -> None:
+    try:
+        await actionlog.log_action(message.bot, message.chat.id, action, text)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 async def _ensure_admin(message: Message) -> tuple[bool, str]:
     """Проверяет, что сообщение из группового чата, где бот - админ."""
     if message.chat.type not in ("group", "supergroup"):
@@ -194,10 +237,10 @@ def help_text() -> str:
         "Команды можно писать и со слэшем (/ban), и просто словом (бан).\n"
         "\n"
         "МОДЕРАЦИЯ (ответом на сообщение, бот должен быть админом):\n"
-        "  бан / забанить — забанить\n"
+        "  бан / бан спам — забанить, можно с причиной\n"
         "  разбан — снять бан\n"
-        "  кик / выгнать — исключить\n"
-        "  мут / мут 30 — мут на N минут (по умолчанию 10)\n"
+        "  кик / кик флуд — исключить, с причиной\n"
+        "  мут / мут 30 / мут 30 флуд — мут на N минут с причиной\n"
         "  размут — снять мут\n"
         "  удалить / удали — удалить сообщение\n"
         "  закрепить / открепить — закреп и снятие закрепа\n"
@@ -231,6 +274,11 @@ def help_text() -> str:
         "  /watchlist — список отслеживаемых чатов\n"
         "\n"
         "ПРОЧЕЕ:\n"
+        "  инфо — карточка участника (ответом или ID)\n"
+        "  правила — показать правила чата\n"
+        "  правила установить <текст> — задать правила (младший админ)\n"
+        "  журнал — куда уходят действия модерации\n"
+        "  журнал @канал — привязать журнал (младший админ)\n"
         "  /id — ваш ID и ID чата\n"
         "  помощь / команды — эта справка\n"
     )
@@ -273,13 +321,17 @@ async def cmd_ban(message: Message):
         return await message.reply(err)
     if not message.reply_to_message:
         return await message.reply("Ответьте на сообщение пользователя.")
+    victim = message.reply_to_message.from_user
+    reason = _reason(message)
     try:
-        res = await ban_user(
-            message.bot,
-            message.chat.id,
-            message.reply_to_message.from_user.id,
-        )
-        await message.reply(res)
+        res = await ban_user(message.bot, message.chat.id, victim.id)
+        note = f"\nПричина: {reason}" if reason else ""
+        await message.reply(res + note)
+        details = actionlog.target(victim)
+        if reason:
+            details += f" · причина: {reason}"
+        details += f" · модератор: {actionlog.actor(message.from_user)}"
+        await _log(message, "БАН", details)
     except Exception as e:  # noqa: BLE001
         await message.reply(f"Ошибка: {e}")
 
@@ -294,9 +346,15 @@ async def cmd_unban(message: Message):
     if not message.reply_to_message:
         return await message.reply("Ответьте на сообщение пользователя.")
     uid = message.reply_to_message.from_user.id
+    victim = message.reply_to_message.from_user
     try:
         await unban_user(message.bot, message.chat.id, uid)
         await message.reply("Бан снят.")
+        await _log(
+            message,
+            "РАЗБАН",
+            f"{actionlog.target(victim)} · модератор: {actionlog.actor(message.from_user)}",
+        )
     except Exception as e:  # noqa: BLE001
         await message.reply(f"Ошибка: {e}")
 
@@ -310,11 +368,17 @@ async def cmd_kick(message: Message):
         return await message.reply(err)
     if not message.reply_to_message:
         return await message.reply("Ответьте на сообщение пользователя.")
+    victim = message.reply_to_message.from_user
+    reason = _reason(message)
     try:
-        res = await kick_user(
-            message.bot, message.chat.id, message.reply_to_message.from_user.id
-        )
-        await message.reply(res)
+        res = await kick_user(message.bot, message.chat.id, victim.id)
+        note = f"\nПричина: {reason}" if reason else ""
+        await message.reply(res + note)
+        details = actionlog.target(victim)
+        if reason:
+            details += f" · причина: {reason}"
+        details += f" · модератор: {actionlog.actor(message.from_user)}"
+        await _log(message, "КИК", details)
     except Exception as e:  # noqa: BLE001
         await message.reply(f"Ошибка: {e}")
 
@@ -328,13 +392,17 @@ async def cmd_mute(message: Message):
         return await message.reply(err)
     if not message.reply_to_message:
         return await message.reply("Ответьте на сообщение пользователя.")
-    args = message.text.split()
-    mins = int(args[1]) if len(args) > 1 and args[1].isdigit() else 10
+    victim = message.reply_to_message.from_user
+    mins, reason = _parse_mute(message)
     try:
-        res = await mute_user(
-            message.bot, message.chat.id, message.reply_to_message.from_user.id, mins
-        )
-        await message.reply(res)
+        res = await mute_user(message.bot, message.chat.id, victim.id, mins)
+        note = f"\nПричина: {reason}" if reason else ""
+        await message.reply(res + note)
+        details = actionlog.target(victim) + f" · {mins} мин"
+        if reason:
+            details += f" · причина: {reason}"
+        details += f" · модератор: {actionlog.actor(message.from_user)}"
+        await _log(message, "МУТ", details)
     except Exception as e:  # noqa: BLE001
         await message.reply(f"Ошибка: {e}")
 
@@ -348,11 +416,15 @@ async def cmd_unmute(message: Message):
         return await message.reply(err)
     if not message.reply_to_message:
         return await message.reply("Ответьте на сообщение пользователя.")
+    victim = message.reply_to_message.from_user
     try:
-        res = await unmute_user(
-            message.bot, message.chat.id, message.reply_to_message.from_user.id
-        )
+        res = await unmute_user(message.bot, message.chat.id, victim.id)
         await message.reply(res)
+        await _log(
+            message,
+            "РАЗМУТ",
+            f"{actionlog.target(victim)} · модератор: {actionlog.actor(message.from_user)}",
+        )
     except Exception as e:  # noqa: BLE001
         await message.reply(f"Ошибка: {e}")
 
@@ -472,6 +544,11 @@ async def cmd_setrank(message: Message):
     await message.reply(
         f"Пользователю {target} выдан ранг «{ranks.rank_title(rank)}»."
     )
+    await _log(
+        message,
+        "РАНГ",
+        f"{target} · «{ranks.rank_title(rank)}» · модератор: {actionlog.actor(message.from_user)}",
+    )
 
 
 @router.message(Command("unrank"))
@@ -496,6 +573,11 @@ async def cmd_unrank(message: Message):
 
     ranks.set_rank(message.chat.id, target, None)
     await message.reply("Ранг снят.")
+    await _log(
+        message,
+        "РАНГ СНЯТ",
+        f"{target} · модератор: {actionlog.actor(message.from_user)}",
+    )
 
 
 @router.message(Command("ranklist", "rlist"))
@@ -547,19 +629,30 @@ async def cmd_warn(message: Message):
         return await message.reply(err)
 
     parts = (message.text or "").split()
-    target, name, ttl_raw = _warn_target(message, parts)
-    if not target:
+    reply = message.reply_to_message
+    reason = ""
+    if reply and reply.from_user:
+        target = reply.from_user.id
+        name = reply.from_user.full_name or str(target)
+        ttl, reason = _parse_warn(message)
+    elif len(parts) > 1 and parts[1].isdigit():
+        target = int(parts[1])
+        name = parts[1]
+        rest = parts[2:]
+        ttl = 0
+        if rest:
+            parsed = warns.parse_duration(rest[0])
+            if parsed is not None:
+                ttl = parsed
+                reason = " ".join(rest[1:])
+            else:
+                reason = " ".join(rest)
+    else:
         return await message.reply(
             "Ответьте на сообщение или укажите ID: варн 1ч (срок: 30м, 1ч, 7д, 1мес)"
         )
 
-    if ttl_raw:
-        ttl = warns.parse_duration(ttl_raw)
-        if ttl is None:
-            return await message.reply(
-                "Не понял срок. Примеры: 30м, 1ч, 7д, 2нед, 1мес."
-            )
-    else:
+    if not ttl:
         ttl = warns.get_default_ttl(
             message.chat.id, config.warn_ttl_days * 86400
         )
@@ -573,6 +666,11 @@ async def cmd_warn(message: Message):
             await message.reply(
                 f"{name}: {count} предупреждения — бан."
             )
+            details = f"{name} · {count} предупреждения"
+            if reason:
+                details += f" · причина: {reason}"
+            details += f" · модератор: {actionlog.actor(message.from_user)}"
+            await _log(message, "БАН (варны)", details)
         except Exception as e:  # noqa: BLE001
             await message.reply(
                 f"Предупреждений {count}, но забанить не удалось: {e}"
@@ -583,6 +681,11 @@ async def cmd_warn(message: Message):
         f"Предупреждение {count}/{config.warn_limit} для {name}. "
         f"Снимется через {warns.format_duration(ttl)}."
     )
+    details = f"{name} · {count}/{config.warn_limit}"
+    if reason:
+        details += f" · причина: {reason}"
+    details += f" · модератор: {actionlog.actor(message.from_user)}"
+    await _log(message, "ВАРН", details)
 
 
 @router.message(Command("warns"))
@@ -620,6 +723,11 @@ async def cmd_unwarn(message: Message):
 
     if warns.remove_last(message.chat.id, target):
         await message.reply(f"Снято последнее предупреждение с {name}.")
+        await _log(
+            message,
+            "СНЯТ ВАРН",
+            f"{name} · модератор: {actionlog.actor(message.from_user)}",
+        )
     else:
         await message.reply(f"У {name} нет активных предупреждений.")
 
@@ -642,6 +750,118 @@ async def cmd_warnset(message: Message):
     await message.reply(
         f"Срок варна по умолчанию: {warns.format_duration(ttl)}."
     )
+
+
+# ---------- Информация, правила, журнал ----------
+
+@router.message(Command("info"))
+async def cmd_info(message: Message):
+    reply = message.reply_to_message
+    user = reply.from_user if reply and reply.from_user else None
+    parts = (message.text or "").split()
+    if user is None and len(parts) > 1 and parts[1].lstrip("-").isdigit():
+        try:
+            member = await message.bot.get_chat_member(
+                message.chat.id, int(parts[1])
+            )
+            user = member.user
+        except Exception:  # noqa: BLE001
+            return await message.reply("Не нашёл такого участника в чате.")
+    if user is None:
+        user = message.from_user
+    if user is None:
+        return
+
+    rank = ranks.get_rank(message.chat.id, user.id)
+    if (
+        (user.username and config.owner_username
+         and user.username.lower() == config.owner_username)
+        or user.id in OWNERS
+    ):
+        rank = "owner"
+    else:
+        owner_id = await get_chat_owner(message.bot, message.chat.id)
+        if owner_id == user.id:
+            rank = "owner"
+
+    summary = stats.user_summary(message.chat.id, user.id)
+    active = warns.list_warns(message.chat.id, user.id)
+    next_left = ""
+    if active:
+        left = max(int(active[0] - time.time()), 0)
+        next_left = f" · ближайший через {warns.format_duration(left)}"
+    first = ""
+    if summary["first"]:
+        first = datetime.fromtimestamp(summary["first"]).strftime("%d.%m.%Y")
+
+    lines = [
+        user.full_name or "—",
+        f"@{user.username}" if user.username else "без username",
+        f"ID: {user.id}",
+        "",
+        f"Ранг: {ranks.rank_title(rank) if rank else '—'}",
+        f"Варны: {len(active)}/{config.warn_limit}{next_left}",
+        f"Сообщений: {summary['total']} (день {summary['day']}, неделя {summary['week']})",
+    ]
+    if first:
+        lines.append(f"В чате с: {first}")
+    await message.reply("\n".join(lines))
+
+
+@router.message(Command("rules"))
+async def cmd_rules(message: Message):
+    text = settings.rules(message.chat.id)
+    if not text:
+        return await message.reply(
+            "Правила не заданы.\nУстановить: правила установить <текст>"
+        )
+    await message.reply("ПРАВИЛА ЧАТА\n\n" + text)
+
+
+@router.message(Command("setrules"))
+async def cmd_setrules(message: Message):
+    if not await _require(message, "assign_moderator"):
+        return
+    raw = (message.text or "").strip()
+    low = raw.lower()
+    text = ""
+    for prefix in (
+        "/setrules",
+        "правила установить",
+        "установить правила",
+        "задать правила",
+        "правила задать",
+    ):
+        if low.startswith(prefix):
+            text = raw[len(prefix):].strip()
+            break
+    if not text:
+        return await message.reply(
+            "Напишите текст: правила установить <текст>"
+        )
+    settings.set_rules(message.chat.id, text)
+    await message.reply("Правила обновлены.")
+
+
+@router.message(Command("setlog"))
+async def cmd_setlog(message: Message):
+    if not await _require(message, "assign_moderator"):
+        return
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip():
+        cur = settings.log_chat(message.chat.id)
+        return await message.reply(
+            f"Журнал: {cur if cur else 'не задан'}\n"
+            "Привязать: журнал @канал или журнал -1001234567890\n"
+            "Отключить: журнал выкл"
+        )
+    raw = parts[1].strip()
+    if raw.lower() in ("off", "выкл", "нет", "0"):
+        settings.unset("logs", message.chat.id)
+        return await message.reply("Журнал отключён.")
+    target = int(raw) if raw.lstrip("-").isdigit() else raw
+    settings.set_log_chat(message.chat.id, target)
+    await message.reply(f"Журнал действий привязан к {target}.")
 
 
 # ---------- Работа со списком чатов для сохранения ----------
@@ -804,6 +1024,19 @@ _RU_COMMANDS: list[tuple[re.Pattern[str], object]] = [
         re.compile(r"^(срок варнов|варн срок|warnset)(\s+.+)?$", re.I),
         cmd_warnset,
     ),
+    (
+        re.compile(r"^(инфо|кто это|профиль)(\s+.+)?$", re.I),
+        cmd_info,
+    ),
+    (re.compile(r"^(правила|rules)$", re.I), cmd_rules),
+    (
+        re.compile(
+            r"^(правила установить|установить правила|задать правила|правила задать)(\s+.+)?$",
+            re.I,
+        ),
+        cmd_setrules,
+    ),
+    (re.compile(r"^(журнал|лог|setlog)(\s+.+)?$", re.I), cmd_setlog),
     (re.compile(r"^(помощь|команды|справка|help)$", re.I), cmd_start),
 ]
 
@@ -845,6 +1078,10 @@ BOT_COMMANDS = [
     BotCommand(command="watch", description="Добавить чат в автосохранение"),
     BotCommand(command="unwatch", description="Убрать чат из автосохранения"),
     BotCommand(command="watchlist", description="Чаты в автосохранении"),
+    BotCommand(command="info", description="Карточка участника"),
+    BotCommand(command="rules", description="Правила чата"),
+    BotCommand(command="setrules", description="Задать правила (админ)"),
+    BotCommand(command="setlog", description="Привязать журнал действий"),
     BotCommand(command="id", description="Мой ID и ID чата"),
 ]
 
