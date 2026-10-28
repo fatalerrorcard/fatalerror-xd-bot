@@ -16,6 +16,7 @@ from aiogram.types import Message
 
 import antispam
 import ranks
+import stats
 from config import config
 from moderation import (
     ban_user,
@@ -200,6 +201,8 @@ async def cmd_start(message: Message):
         "  /kick [ответ] — исключить · /mute 30 — мут 30 мин\n"
         "  /unmute — снять мут · /clear, /delete — удалить ответное сообщение\n"
         "  /pin — закрепить (ответ) · /unpin — открепить\n"
+        "Статистика:\n"
+        "  /топ — топ за всё время · /топ день · /топ неделя · /я — своя статистика\n"
         "Сохранение контента:\n"
         "  /watch — добавить чат в автосохранение\n"
         "  /unwatch — убрать чат\n"
@@ -600,11 +603,19 @@ async def bot_added_to_chat(event: types.ChatMemberUpdated):
 
 
 async def main():
+    # Счётчик сообщений работает до хендлеров
+    dp.message.outer_middleware(stats.StatsMiddleware())
+
+    dp.include_router(stats.router)
     dp.include_router(router)
     dp.include_router(antispam.router)
     await bot.delete_webhook(drop_pending_updates=True)
     log.info("Запуск бота...")
-    await dp.start_polling(bot)
+    try:
+        await dp.start_polling(bot)
+    finally:
+        stats.flush()
+        log.info("Статистика сохранена, бот остановлен.")
 
 
 if __name__ == "__main__":
