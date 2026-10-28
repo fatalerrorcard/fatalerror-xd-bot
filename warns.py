@@ -8,12 +8,12 @@
 
 from __future__ import annotations
 
-import json
 import re
 import time
-from pathlib import Path
 
-_STORE = Path(__file__).with_name("warns.json")
+import storage
+
+_FILE = "warns.json"
 
 _UNITS: dict[str, int] = {
     # минуты
@@ -35,20 +35,11 @@ _UNITS: dict[str, int] = {
 
 
 def _load() -> dict:
-    try:
-        with open(_STORE, encoding="utf-8") as f:
-            data = json.load(f)
-            return data if isinstance(data, dict) else {}
-    except Exception:  # noqa: BLE001
-        return {}
+    return storage.load(_FILE, {})
 
 
 def _save(data: dict) -> None:
-    try:
-        with open(_STORE, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
-    except Exception:  # noqa: BLE001
-        pass
+    storage.save(_FILE, data)
 
 
 def parse_duration(text: str) -> int | None:
