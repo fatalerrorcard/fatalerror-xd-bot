@@ -18,6 +18,7 @@ from aiogram.types import BotCommand, Message
 import antispam
 import ranks
 import stats
+import warns
 from config import config
 from moderation import (
     ban_user,
@@ -208,6 +209,14 @@ def help_text() -> str:
         "      ранги: модер, стмодер, младший админ, старший админ\n"
         "  снять ранг — забрать ранг (ответом)\n"
         "  ранги чата — кто какой ранг имеет\n"
+        "\n"
+        "ПРЕДУПРЕЖДЕНИЯ (варны):\n"
+        "  варн / варн 1ч / варн 7д / варн 1мес — выдать (ответом)\n"
+        "      срок: 30м, 1ч, 7д, 2нед, 1мес (без срока — стандартный)\n"
+        "  варны — показать предупреждения (ответом или /warns)\n"
+        "  снять варн — снять последнее (ответом)\n"
+        "  срок варнов 7д — срок по умолчанию для чата\n"
+        f"  {config.warn_limit} предупреждения = бан\n"
         "\n"
         "СТАТИСТИКА:\n"
         "  топ — топ по сообщениям за всё время\n"
@@ -509,6 +518,132 @@ async def cmd_ranklist(message: Message):
     await message.reply("Ранги в чате:\n" + "\n".join(lines))
 
 
+# ---------- Предупреждения (варны) ----------
+
+def _warn_target(
+    message: Message, parts: list[str]
+) -> tuple[int | None, str, str | None]:
+    """Определяет цель: ответ на сообщение или числовой ID.
+
+    Возвращает (user_id, имя, сырой срок).
+    """
+    reply = message.reply_to_message
+    if reply and reply.from_user:
+        name = reply.from_user.full_name or str(reply.from_user.id)
+        ttl_raw = parts[1] if len(parts) > 1 else None
+        return reply.from_user.id, name, ttl_raw
+    if len(parts) > 1 and parts[1].isdigit():
+        ttl_raw = parts[2] if len(parts) > 2 else None
+        return int(parts[1]), parts[1], ttl_raw
+    return None, "", None
+
+
+@router.message(Command("warn"))
+async def cmd_warn(message: Message):
+    if not await _require(message, "mute"):
+        return
+    ok, err = await _ensure_admin(message)
+    if not ok:
+        return await message.reply(err)
+
+    parts = (message.text or "").split()
+    target, name, ttl_raw = _warn_target(message, parts)
+    if not target:
+        return await message.reply(
+            "Ответьте на сообщение или укажите ID: варн 1ч (срок: 30м, 1ч, 7д, 1мес)"
+        )
+
+    if ttl_raw:
+        ttl = warns.parse_duration(ttl_raw)
+        if ttl is None:
+            return await message.reply(
+                "Не понял срок. Примеры: 30м, 1ч, 7д, 2нед, 1мес."
+            )
+    else:
+        ttl = warns.get_default_ttl(
+            message.chat.id, config.warn_ttl_days * 86400
+        )
+
+    count, _until = warns.add_warn(message.chat.id, target, ttl, name)
+
+    if count >= config.warn_limit:
+        try:
+            await ban_user(message.bot, message.chat.id, target)
+            warns.clear(message.chat.id, target)
+            await message.reply(
+                f"{name}: {count} предупреждения — бан."
+            )
+        except Exception as e:  # noqa: BLE001
+            await message.reply(
+                f"Предупреждений {count}, но забанить не удалось: {e}"
+            )
+        return
+
+    await message.reply(
+        f"Предупреждение {count}/{config.warn_limit} для {name}. "
+        f"Снимется через {warns.format_duration(ttl)}."
+    )
+
+
+@router.message(Command("warns"))
+async def cmd_warns(message: Message):
+    parts = (message.text or "").split()
+    target, name, _ = _warn_target(message, parts)
+    if not target:
+        target = message.from_user.id if message.from_user else None
+        name = "вы"
+    if not target:
+        return
+
+    active = warns.list_warns(message.chat.id, target)
+    if not active:
+        return await message.reply(f"У {name} нет предупреждений.")
+
+    import time as _time
+
+    now = _time.time()
+    lines = [f"Предупреждения ({name}): {len(active)}/{config.warn_limit}"]
+    for i, until in enumerate(active, start=1):
+        left = int(until - now)
+        lines.append(f"{i}. осталось {warns.format_duration(left)}")
+    await message.reply("\n".join(lines))
+
+
+@router.message(Command("unwarn"))
+async def cmd_unwarn(message: Message):
+    if not await _require(message, "mute"):
+        return
+    parts = (message.text or "").split()
+    target, name, _ = _warn_target(message, parts)
+    if not target:
+        return await message.reply("Ответьте на сообщение или укажите ID.")
+
+    if warns.remove_last(message.chat.id, target):
+        await message.reply(f"Снято последнее предупреждение с {name}.")
+    else:
+        await message.reply(f"У {name} нет активных предупреждений.")
+
+
+@router.message(Command("warnset"))
+async def cmd_warnset(message: Message):
+    if not await _require(message, "assign_moderator"):
+        return
+    parts = (message.text or "").split()
+    if len(parts) < 2:
+        cur = warns.get_default_ttl(message.chat.id, config.warn_ttl_days * 86400)
+        return await message.reply(
+            f"Срок варна по умолчанию: {warns.format_duration(cur)}.\n"
+            "Изменить: /warnset 7д (30м, 1ч, 7д, 2нед, 1мес)"
+        )
+    ttl = warns.parse_duration(parts[1])
+    if ttl is None:
+        return await message.reply("Не понял срок. Примеры: 30м, 1ч, 7д, 1мес.")
+    warns.set_default_ttl(message.chat.id, ttl)
+    await message.reply(
+        f"Срок варна по умолчанию: {warns.format_duration(ttl)}."
+    )
+
+
 # ---------- Работа со списком чатов для сохранения ----------
 
 @router.message(Command("watch"))
@@ -656,6 +791,19 @@ _RU_COMMANDS: list[tuple[re.Pattern[str], object]] = [
     (re.compile(r"^выдать\s+\S+$", re.I), cmd_setrank),
     (re.compile(r"^(снять ранг|забрать ранг)$", re.I), cmd_unrank),
     (re.compile(r"^(ранги чата|кто тут кто)$", re.I), cmd_ranklist),
+    (
+        re.compile(r"^(варн|предупреждение|warn)(\s+.+)?$", re.I),
+        cmd_warn,
+    ),
+    (re.compile(r"^(варны|предупреждения|warns)$", re.I), cmd_warns),
+    (
+        re.compile(r"^(снять варн|унварн|unwarn)(\s+.+)?$", re.I),
+        cmd_unwarn,
+    ),
+    (
+        re.compile(r"^(срок варнов|варн срок|warnset)(\s+.+)?$", re.I),
+        cmd_warnset,
+    ),
     (re.compile(r"^(помощь|команды|справка|help)$", re.I), cmd_start),
 ]
 
@@ -682,6 +830,10 @@ BOT_COMMANDS = [
     BotCommand(command="setrank", description="Выдать ранг (ответом)"),
     BotCommand(command="unrank", description="Снять ранг"),
     BotCommand(command="ranklist", description="Ранги в чате"),
+    BotCommand(command="warn", description="Предупреждение: /warn 1ч (ответом)"),
+    BotCommand(command="warns", description="Предупреждения пользователя"),
+    BotCommand(command="unwarn", description="Снять предупреждение"),
+    BotCommand(command="warnset", description="Срок варна по умолчанию"),
     BotCommand(command="ban", description="Забанить (ответом)"),
     BotCommand(command="unban", description="Снять бан"),
     BotCommand(command="kick", description="Исключить (ответом)"),
