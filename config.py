@@ -71,6 +71,10 @@ class Config:
     warn_limit: int = int(os.getenv("WARN_LIMIT", "3"))
     # Срок действия варна по умолчанию, дней
     warn_ttl_days: int = int(os.getenv("WARN_TTL_DAYS", "7"))
+
+    # ===== Репутация =====
+    # Сколько оценок (+/-) в сутки может поставить один участник
+    rep_daily_limit: int = int(os.getenv("REP_DAILY_LIMIT", "10"))
     welcome_enabled: bool = os.getenv("WELCOME_ENABLED", "1") == "1"
     welcome_text: str = os.getenv(
         "WELCOME_TEXT",
