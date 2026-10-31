@@ -280,6 +280,8 @@ def help_text() -> str:
         "ЖАЛОБЫ:\n"
         "  жалоба (ответом) — карточка с кнопками для админов\n"
         "  жалоба спам — жалоба с причиной\n"
+        "  подать жалобу (ответом) — сообщение в чат с юзом, причиной и отметкой админов\n"
+        "  подать жалобу спам — то же с причиной\n"
         "\n"
         "СОХРАНЕНИЕ КОНТЕНТА:\n"
         "  /watch — добавить чат в автосохранение\n"
@@ -977,6 +979,102 @@ async def cmd_reptop(message: Message):
     await message.reply("\n".join(lines))
 
 
+# ---------- Подать жалобу (с причиной, упоминание админов) ----------
+
+async def _admin_mentions(chat) -> str:
+    """@username админов чата: создатель + глобальные + ранги >= 2."""
+    usernames: list[str] = []
+    added_ids: set[int] = set()
+
+    try:
+        owner_id = await get_chat_owner(bot, chat.id)
+        if owner_id is not None:
+            owner_member = await bot.get_chat_member(chat.id, owner_id)
+            u = owner_member.user
+            if u.username:
+                usernames.append(f"@{u.username}")
+                added_ids.add(u.id)
+    except Exception:  # noqa: BLE001
+        pass
+
+    for uid in OWNERS:
+        if uid in added_ids:
+            continue
+        try:
+            member = await bot.get_chat_member(chat.id, uid)
+            u = member.user
+            if u.username:
+                usernames.append(f"@{u.username}")
+                added_ids.add(u.id)
+        except Exception:  # noqa: BLE001
+            pass
+
+    for uid, rank in ranks.chat_ranks(chat.id).items():
+        if ranks.rank_level(rank) < 2 or uid in added_ids:
+            continue
+        try:
+            member = await bot.get_chat_member(chat.id, uid)
+            u = member.user
+            if u.username:
+                usernames.append(f"@{u.username}")
+                added_ids.add(u.id)
+        except Exception:  # noqa: BLE001
+            pass
+
+    return " ".join(usernames) if usernames else ""
+
+
+@router.message(Command("reportform"))
+async def cmd_reportform(message: Message):
+    if message.chat.type not in ("group", "supergroup"):
+        return await message.reply("Жалоба работает только в группах.")
+
+    reason = _reason(message)
+    reply = message.reply_to_message
+    if not reply or not reply.from_user:
+        return await message.reply(
+            "Формат: подать жалобу (ответом на сообщение нарушителя) или\n"
+            "подать жалобу <причина> (ответом на сообщение нарушителя)."
+        )
+    victim = reply.from_user
+    if victim.is_bot:
+        return await message.reply("На бота жаловаться не нужно.")
+    if message.from_user is None:
+        return
+    if victim.id == message.from_user.id:
+        return await message.reply("Нельзя жаловаться на себя.")
+
+    if not reason:
+        reason = "причина не указана"
+
+    admin_mentions = await _admin_mentions(message.chat)
+
+    lines = [
+        "ЖАЛОБА ПОДАНА",
+        "",
+        f"Подал: {actionlog.target(message.from_user)}",
+        f"Нарушитель: {actionlog.target(victim)}",
+        f"Причина: {reason}",
+    ]
+    if admin_mentions:
+        lines.append("")
+        lines.append(f"Администраторы: {admin_mentions}")
+
+    await message.reply("\n".join(lines))
+
+    if settings.log_chat(message.chat.id):
+        try:
+            await actionlog.log_action(
+                message.bot,
+                message.chat.id,
+                "ЖАЛОБА",
+                f"{actionlog.target(victim)} · причина: {reason} · "
+                f"подал: {actionlog.actor(message.from_user)}",
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+
 # ---------- Жалобы ----------
 
 _recent_reports: dict[tuple[int, int], float] = {}
@@ -1265,6 +1363,10 @@ _RU_COMMANDS: list[tuple[re.Pattern[str], object]] = [
         cmd_report,
     ),
     (
+        re.compile(r"^(подать жалобу|жалоба подать)(\s+.+)?$", re.I),
+        cmd_reportform,
+    ),
+    (
         re.compile(r"^(инфо|кто это|профиль)(\s+.+)?$", re.I),
         cmd_info,
     ),
@@ -1324,11 +1426,7 @@ BOT_COMMANDS = [
     BotCommand(command="plus", description="Плюс участнику (ответом)"),
     BotCommand(command="minus", description="Минус участнику (ответом)"),
     BotCommand(command="report", description="Жалоба на сообщение (ответом)"),
-    BotCommand(command="инфо", description="Карточка участника"),
-    BotCommand(command="реп", description="Репутация участника"),
-    BotCommand(command="правила", description="Правила чата"),
-    BotCommand(command="топ", description="Топ по сообщениям"),
-    BotCommand(command="жалоба", description="Жалоба на сообщение"),
+    BotCommand(command="reportform", description="Подать жалобу с причиной"),
     BotCommand(command="rules", description="Правила чата"),
     BotCommand(command="setrules", description="Задать правила (админ)"),
     BotCommand(command="setlog", description="Привязать журнал действий"),
