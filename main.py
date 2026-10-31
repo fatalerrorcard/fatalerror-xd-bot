@@ -19,6 +19,7 @@ from aiogram.types import BotCommand, Message
 import actionlog
 import antispam
 import ranks
+import reputation
 import settings
 import stats
 import warns
@@ -134,27 +135,29 @@ _NEED_TITLE = {
 }
 
 
-async def effective_level(message: Message) -> int:
-    """Уровень пользователя: 0 — нет прав, 1–4 — ранги, 5 — владелец."""
-    user = message.from_user
-    if not user:
+async def level_for(chat, user, bot) -> int:
+    """Уровень прав пользователя в чате (0–5). Работает и для кнопок."""
+    if user is None:
         return 0
-    # Владелец по username
     if (
         user.username
         and config.owner_username
         and user.username.lower() == config.owner_username
     ):
         return ranks.OWNER_LEVEL
-    # Глобальные админы из ADMIN_IDS
     if user.id in OWNERS:
         return ranks.OWNER_LEVEL
-    if message.chat.type in ("group", "supergroup"):
-        owner = await get_chat_owner(message.bot, message.chat.id)
+    if chat.type in ("group", "supergroup"):
+        owner = await get_chat_owner(bot, chat.id)
         if owner is not None and user.id == owner:
             return ranks.OWNER_LEVEL
-        return ranks.rank_level(ranks.get_rank(message.chat.id, user.id))
+        return ranks.rank_level(ranks.get_rank(chat.id, user.id))
     return 0
+
+
+async def effective_level(message: Message) -> int:
+    """Уровень прав отправителя сообщения."""
+    return await level_for(message.chat, message.from_user, message.bot)
 
 
 async def has_perm(message: Message, perm: str) -> bool:
@@ -267,6 +270,16 @@ def help_text() -> str:
         "  топ неделя — топ за 7 дней\n"
         "  моя статистика — ваша личная статистика\n"
         "  /topreset — сброс статистики чата (старший админ)\n"
+        "\n"
+        "РЕПУТАЦИЯ:\n"
+        "  + / - (ответом) — плюс или минус участнику\n"
+        "  реп — репутация участника (ответом) или своя\n"
+        "  топ репутации — рейтинг чата\n"
+        f"      лимит оценок: {config.rep_daily_limit} в сутки\n"
+        "\n"
+        "ЖАЛОБЫ:\n"
+        "  жалоба (ответом) — карточка с кнопками для админов\n"
+        "  жалоба спам — жалоба с причиной\n"
         "\n"
         "СОХРАНЕНИЕ КОНТЕНТА:\n"
         "  /watch — добавить чат в автосохранение\n"
@@ -794,6 +807,12 @@ async def cmd_info(message: Message):
     if summary["first"]:
         first = datetime.fromtimestamp(summary["first"]).strftime("%d.%m.%Y")
 
+    rep_value = reputation.score(message.chat.id, user.id)
+    rep_place = reputation.places(message.chat.id).get(str(user.id))
+    rep_line = f"Репутация: {rep_value:+d}"
+    if rep_place:
+        rep_line += f" · место {rep_place}"
+
     lines = [
         user.full_name or "—",
         f"@{user.username}" if user.username else "без username",
@@ -802,6 +821,7 @@ async def cmd_info(message: Message):
         f"Ранг: {ranks.rank_title(rank) if rank else '—'}",
         f"Варны: {len(active)}/{config.warn_limit}{next_left}",
         f"Сообщений: {summary['total']} (день {summary['day']}, неделя {summary['week']})",
+        rep_line,
     ]
     if first:
         lines.append(f"В чате с: {first}")
@@ -862,6 +882,215 @@ async def cmd_setlog(message: Message):
     target = int(raw) if raw.lstrip("-").isdigit() else raw
     settings.set_log_chat(message.chat.id, target)
     await message.reply(f"Журнал действий привязан к {target}.")
+
+
+# ---------- Репутация ----------
+
+def _member_name(user) -> str:
+    if user is None:
+        return "—"
+    if user.username:
+        return f"@{user.username}"
+    return user.full_name or str(user.id)
+
+
+async def _give_rep(message: Message, delta: int) -> None:
+    if message.chat.type not in ("group", "supergroup"):
+        return
+    reply = message.reply_to_message
+    if not reply or not reply.from_user:
+        return await message.reply("Ответьте на сообщение участника.")
+    target = reply.from_user
+    if target.is_bot:
+        return await message.reply("Ботам репутацию не ставят.")
+    if message.from_user is None:
+        return
+
+    ok, err, value = reputation.give(
+        message.chat.id,
+        message.from_user.id,
+        target.id,
+        delta,
+        config.rep_daily_limit,
+        target.full_name or "",
+        target.username or "",
+    )
+    if not ok:
+        return await message.reply(err)
+
+    sign = "+" if delta > 0 else ""
+    await message.reply(
+        f"{sign}{delta} → {_member_name(target)} · репутация {value:+d}"
+    )
+
+
+@router.message(Command("plus", "плюс"))
+async def cmd_plus(message: Message):
+    await _give_rep(message, 1)
+
+
+@router.message(Command("minus", "минус"))
+async def cmd_minus(message: Message):
+    await _give_rep(message, -1)
+
+
+@router.message(Command("rep", "reputation", "реп", "репутация"))
+async def cmd_rep(message: Message):
+    if message.chat.type not in ("group", "supergroup"):
+        return await message.reply("Команда работает только в группе.")
+    reply = message.reply_to_message
+    user = reply.from_user if reply and reply.from_user else message.from_user
+    if user is None:
+        return
+
+    value = reputation.score(message.chat.id, user.id)
+    place = reputation.places(message.chat.id).get(str(user.id))
+    line = f"Репутация {_member_name(user)}: {value:+d}"
+    if place:
+        line += f" · место {place}"
+    if message.from_user:
+        left = max(
+            config.rep_daily_limit
+            - reputation.given_today(message.chat.id, message.from_user.id),
+            0,
+        )
+        line += f"\nОсталось оценок сегодня: {left}/{config.rep_daily_limit}"
+    await message.reply(line)
+
+
+@router.message(Command("reptop", "топрепутации"))
+async def cmd_reptop(message: Message):
+    if message.chat.type not in ("group", "supergroup"):
+        return await message.reply("Команда работает только в группе.")
+    rows = reputation.top(message.chat.id, 10)
+    if not rows:
+        return await message.reply("Репутация пока никому не выдавалась.")
+
+    lines = ["ТОП РЕПУТАЦИИ"]
+    for i, row in enumerate(rows, start=1):
+        who = (
+            f"@{row['username']}"
+            if row["username"]
+            else (row["name"] or row["id"])
+        )
+        lines.append(f"{i}. {who} — {row['score']:+d}")
+    await message.reply("\n".join(lines))
+
+
+# ---------- Жалобы ----------
+
+_recent_reports: dict[tuple[int, int], float] = {}
+_REPORT_COOLDOWN = 300
+
+
+@router.message(Command("report"))
+async def cmd_report(message: Message):
+    if message.chat.type not in ("group", "supergroup"):
+        return await message.reply("Жалоба работает только в группе.")
+    reply = message.reply_to_message
+    if not reply or not reply.from_user:
+        return await message.reply(
+            "Ответьте на сообщение нарушителя: жалоба спам"
+        )
+    target = reply.from_user
+    if target.is_bot:
+        return await message.reply("На бота жаловаться не нужно.")
+    if message.from_user is None:
+        return
+    if target.id == message.from_user.id:
+        return await message.reply("Нельзя жаловаться на себя.")
+
+    key = (message.from_user.id, target.id)
+    now = time.time()
+    if now - _recent_reports.get(key, 0) < _REPORT_COOLDOWN:
+        return await message.reply(
+            "Жалоба на этого участника уже отправлена. Подождите."
+        )
+    _recent_reports[key] = now
+
+    reason = _reason(message)
+    lines = [
+        "ЖАЛОБА",
+        f"Нарушитель: {actionlog.target(target)}",
+        f"От: {actionlog.actor(message.from_user)}",
+    ]
+    if reason:
+        lines.append(f"Причина: {reason}")
+    lines.append("")
+    lines.append("Решение принимают администраторы.")
+
+    kb = types.InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                types.InlineKeyboardButton(
+                    text="Забанить",
+                    callback_data=f"rep:ban:{target.id}:{reply.message_id}",
+                ),
+                types.InlineKeyboardButton(
+                    text="Мут 1ч",
+                    callback_data=f"rep:mute:{target.id}:{reply.message_id}",
+                ),
+                types.InlineKeyboardButton(
+                    text="Отклонить",
+                    callback_data=f"rep:skip:{target.id}:{reply.message_id}",
+                ),
+            ]
+        ]
+    )
+    await message.reply("\n".join(lines), reply_markup=kb)
+
+
+@router.callback_query(F.data.startswith("rep:"))
+async def on_report_action(cb: types.CallbackQuery):
+    parts = (cb.data or "").split(":")
+    if len(parts) < 4:
+        return await cb.answer("Некорректная жалоба", show_alert=True)
+    _, action, target_raw, _src = parts
+    try:
+        target_id = int(target_raw)
+    except ValueError:
+        return await cb.answer("Некорректная жалоба", show_alert=True)
+
+    chat = cb.message.chat
+    actor_user = cb.from_user
+    level = await level_for(chat, actor_user, cb.bot)
+    need = {"ban": "ban", "mute": "mute", "skip": "mute"}.get(action)
+    if need is None:
+        return await cb.answer("Неизвестное действие", show_alert=True)
+    if level < ranks.PERM_LEVELS[need]:
+        return await cb.answer("Нет прав на это действие", show_alert=True)
+
+    try:
+        if action == "ban":
+            await ban_user(cb.bot, chat.id, target_id)
+            verdict = f"Забанен · {actionlog.actor(actor_user)}"
+            log_kind = "БАН (жалоба)"
+        elif action == "mute":
+            await mute_user(cb.bot, chat.id, target_id, 60)
+            verdict = f"Мут 60 мин · {actionlog.actor(actor_user)}"
+            log_kind = "МУТ (жалоба)"
+        else:
+            verdict = f"Отклонено · {actionlog.actor(actor_user)}"
+            log_kind = "ЖАЛОБА ОТКЛОНЕНА"
+    except Exception as e:  # noqa: BLE001
+        return await cb.answer(f"Не удалось: {e}", show_alert=True)
+
+    base = cb.message.text or "ЖАЛОБА"
+    try:
+        await cb.message.edit_text(f"{base}\n\n→ {verdict}", reply_markup=None)
+    except Exception:  # noqa: BLE001
+        pass
+    await cb.answer("Готово")
+
+    try:
+        await actionlog.log_action(
+            cb.bot,
+            chat.id,
+            log_kind,
+            f"{target_id} · модератор: {actionlog.actor(actor_user)}",
+        )
+    except Exception:  # noqa: BLE001
+        pass
 
 
 # ---------- Работа со списком чатов для сохранения ----------
@@ -1025,6 +1254,17 @@ _RU_COMMANDS: list[tuple[re.Pattern[str], object]] = [
         cmd_warnset,
     ),
     (
+        re.compile(r"^(топ репутации|рейтинг репутации|reptop)$", re.I),
+        cmd_reptop,
+    ),
+    (re.compile(r"^(\+|плюс|plus)$", re.I), cmd_plus),
+    (re.compile(r"^(-|минус|minus)$", re.I), cmd_minus),
+    (re.compile(r"^(реп|репутация|rep)$", re.I), cmd_rep),
+    (
+        re.compile(r"^(жалоба|репорт|report)(\s+.+)?$", re.I),
+        cmd_report,
+    ),
+    (
         re.compile(r"^(инфо|кто это|профиль)(\s+.+)?$", re.I),
         cmd_info,
     ),
@@ -1079,6 +1319,16 @@ BOT_COMMANDS = [
     BotCommand(command="unwatch", description="Убрать чат из автосохранения"),
     BotCommand(command="watchlist", description="Чаты в автосохранении"),
     BotCommand(command="info", description="Карточка участника"),
+    BotCommand(command="rep", description="Репутация участника"),
+    BotCommand(command="reptop", description="Топ репутации"),
+    BotCommand(command="plus", description="Плюс участнику (ответом)"),
+    BotCommand(command="minus", description="Минус участнику (ответом)"),
+    BotCommand(command="report", description="Жалоба на сообщение (ответом)"),
+    BotCommand(command="инфо", description="Карточка участника"),
+    BotCommand(command="реп", description="Репутация участника"),
+    BotCommand(command="правила", description="Правила чата"),
+    BotCommand(command="топ", description="Топ по сообщениям"),
+    BotCommand(command="жалоба", description="Жалоба на сообщение"),
     BotCommand(command="rules", description="Правила чата"),
     BotCommand(command="setrules", description="Задать правила (админ)"),
     BotCommand(command="setlog", description="Привязать журнал действий"),
