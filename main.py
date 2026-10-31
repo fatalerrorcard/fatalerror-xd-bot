@@ -18,6 +18,7 @@ from aiogram.types import BotCommand, Message
 
 import actionlog
 import antispam
+import chatbook
 import ranks
 import reputation
 import settings
@@ -296,6 +297,10 @@ def help_text() -> str:
         "  журнал @канал — привязать журнал (младший админ)\n"
         "  /id — ваш ID и ID чата\n"
         "  помощь / команды — эта справка\n"
+        "\n"
+        "КОНСОЛЬ ВЛАДЕЛЬЦА (только в личке бота):\n"
+        "  чаты — список групп и каналов, где состоит бот\n"
+        "  объявление <текст> — рассылка по всем известным чатам\n"
     )
 
 
@@ -1075,6 +1080,64 @@ async def cmd_reportform(message: Message):
             pass
 
 
+# ---------- Админ-консоль: чаты и рассылка ----------
+
+@router.message(Command("chats"))
+async def cmd_chats(message: Message):
+    if not await _is_owner(message):
+        return await message.reply("Нет прав: консоль доступна владельцу.")
+    if message.chat.type != "private":
+        return await message.reply("Список чатов присылаю только в личку владельцу.")
+
+    targets = chatbook.announce_targets()
+    if not targets:
+        return await message.reply(
+            "Бот пока не видел ни одного чата. Добавьте его в группу/канал "
+            "и пришлите ему туда любое сообщение — бот запомнит чат."
+        )
+
+    kind = {"group": "группа", "supergroup": "группа", "channel": "канал"}
+    lines = [f"Известно чатов: {len(targets)}", ""]
+    for t in targets:
+        whom = f"{kind.get(t['type'], t['type'])} {t['id']}"
+        title = t.get("title") or ""
+        lines.append(f"• {whom}" + (f" — {title}" if title else ""))
+    lines.append("")
+    lines.append("Рассылка: объявление <текст>")
+    await message.reply("\n".join(lines))
+
+
+@router.message(Command("announce"))
+async def cmd_announce(message: Message):
+    if not await _is_owner(message):
+        return await message.reply("Нет прав: рассылка доступна владельцу.")
+    if message.chat.type != "private":
+        return await message.reply("Объявление отправляй из лички боту.")
+
+    parts = (message.text or "").split(maxsplit=1)
+    text = parts[1].strip() if len(parts) > 1 else ""
+    if not text:
+        return await message.reply("Формат: объявление <текст>")
+
+    targets = chatbook.announce_targets()
+    if not targets:
+        return await message.reply("Нет известных чатов для рассылки.")
+
+    ok_count = 0
+    fail_count = 0
+    for t in targets:
+        try:
+            await bot.send_message(t["id"], text, disable_web_page_preview=True)
+            ok_count += 1
+        except Exception as e:  # noqa: BLE001
+            fail_count += 1
+            log.warning("Рассылку не смог в %s: %s", t["id"], e)
+
+    await message.reply(
+        f"Объявление разослано: {ok_count} чатов, недоступно: {fail_count}."
+    )
+
+
 # ---------- Жалобы ----------
 
 _recent_reports: dict[tuple[int, int], float] = {}
@@ -1262,10 +1325,12 @@ async def auto_save(message: Message):
 async def bot_added_to_chat(event: types.ChatMemberUpdated):
     """Когда бота добавляют в группу, поздороваться, если в чате есть владелец."""
     chat = event.chat
-    if chat.type not in ("group", "supergroup"):
+    if chat.type not in ("group", "supergroup", "channel"):
         return
 
     new_status = event.new_chat_member.status
+    if new_status in ("member", "administrator"):
+        chatbook.remember(chat.id, chat.type, chat.title or "")
     if new_status not in ("member", "administrator"):
         return
 
@@ -1379,6 +1444,11 @@ _RU_COMMANDS: list[tuple[re.Pattern[str], object]] = [
         cmd_setrules,
     ),
     (re.compile(r"^(журнал|лог|setlog)(\s+.+)?$", re.I), cmd_setlog),
+    (re.compile(r"^(чаты|мои чаты|список чатов|chats)$", re.I), cmd_chats),
+    (
+        re.compile(r"^(объявление|рассылка|announce)(\s+.+)?$", re.I),
+        cmd_announce,
+    ),
     (re.compile(r"^(помощь|команды|справка|help)$", re.I), cmd_start),
 ]
 
@@ -1430,6 +1500,8 @@ BOT_COMMANDS = [
     BotCommand(command="rules", description="Правила чата"),
     BotCommand(command="setrules", description="Задать правила (админ)"),
     BotCommand(command="setlog", description="Привязать журнал действий"),
+    BotCommand(command="chats", description="Мои чаты (консоль владельца)"),
+    BotCommand(command="announce", description="Рассылка объявления"),
     BotCommand(command="id", description="Мой ID и ID чата"),
 ]
 
