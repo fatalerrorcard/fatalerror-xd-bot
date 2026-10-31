@@ -14,6 +14,7 @@ from aiogram import BaseMiddleware, Router, types
 from aiogram.filters import Command
 from aiogram.types import Message
 
+import chatbook
 import storage
 
 router = Router(name="stats")
@@ -68,8 +69,16 @@ def flush() -> None:
 def record(message: Message) -> None:
     """Учесть одно сообщение в группе."""
     global _dirty
-    if message.chat.type not in ("group", "supergroup"):
+    if message.chat.type not in ("group", "supergroup", "channel"):
         return
+    try:
+        chatbook.remember(
+            message.chat.id,
+            message.chat.type,
+            message.chat.title or "",
+        )
+    except Exception:  # noqa: BLE001
+        pass
     user = message.from_user
     if not user or user.is_bot:
         return
