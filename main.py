@@ -280,6 +280,10 @@ def help_text() -> str:
         "  топ репутации — рейтинг чата\n"
         f"      лимит оценок: {config.rep_daily_limit} в сутки\n"
         "\n"
+        "АВТОБАН ЗА РЕКЛАМУ:\n"
+        "  автобан вкл / автобан выкл — защита от рекламных ссылок\n"
+        "  (банит автоматически; по умолчанию выключено, включите в чате)\n"
+        "\n"
         "ЖАЛОБЫ:\n"
         "  жалоба (ответом) — карточка с кнопками для админов\n"
         "  жалоба спам — жалоба с причиной\n"
@@ -900,6 +904,32 @@ async def cmd_setlog(message: Message):
     await message.reply(f"Журнал действий привязан к {target}.")
 
 
+# ---------- Автобан за рекламу ----------
+
+@router.message(Command("adban"))
+async def cmd_adban(message: Message):
+    if not await _require(message, "assign_moderator"):
+        return
+    parts = (message.text or "").split(maxsplit=1)
+    arg = parts[1].strip().lower() if len(parts) > 1 else ""
+    if not arg:
+        state = "включён" if settings.adban_enabled(message.chat.id) else "выключен"
+        return await message.reply(
+            f"Автобан за рекламу: {state}\n"
+            "Включить: /adban on (или алиас «автобан вкл»)\n"
+            "Выключить: /adban off (или алиас «автобан выкл»)"
+        )
+    if arg in ("on", "вкл", "включить", "да", "1"):
+        settings.set_adban(message.chat.id, True)
+        await message.reply("Автобан за рекламу включён.")
+        return
+    if arg in ("off", "выкл", "выключить", "нет", "0"):
+        settings.set_adban(message.chat.id, False)
+        await message.reply("Автобан за рекламу выключен.")
+        return
+    await message.reply("Формат: /adban on или /adban off")
+
+
 # ---------- Репутация ----------
 
 def _member_name(user) -> str:
@@ -1453,6 +1483,10 @@ _RU_COMMANDS: list[tuple[re.Pattern[str], object]] = [
         cmd_setrules,
     ),
     (re.compile(r"^(журнал|лог|setlog)(\s+.+)?$", re.I), cmd_setlog),
+    (
+        re.compile(r"^(автобан|адбан)(\s+(вкл|выкл|on|off|включить|выключить|да|нет|1|0))?$", re.I),
+        cmd_adban,
+    ),
     (re.compile(r"^(чаты|мои чаты|список чатов|chats)$", re.I), cmd_chats),
     (
         re.compile(r"^(объявление|рассылка|announce)(\s+.+)?$", re.I),
@@ -1518,6 +1552,7 @@ BOT_COMMANDS = [
     BotCommand(command="rules", description="Правила чата"),
     BotCommand(command="setrules", description="Задать правила (админ)"),
     BotCommand(command="setlog", description="Привязать журнал действий"),
+    BotCommand(command="adban", description="Автобан за рекламу: on/off"),
     BotCommand(command="chats", description="Мои чаты (консоль владельца)"),
     BotCommand(command="announce", description="Рассылка объявления"),
     BotCommand(command="id", description="Мой ID и ID чата"),
