@@ -43,3 +43,11 @@ def rules(chat_id: int) -> str | None:
 
 def set_rules(chat_id: int, text: str) -> None:
     set_value("rules", chat_id, text)
+
+
+def adban_enabled(chat_id: int) -> bool:
+    return bool(get("adban", chat_id, False))
+
+
+def set_adban(chat_id: int, enabled: bool) -> None:
+    set_value("adban", chat_id, bool(enabled))
