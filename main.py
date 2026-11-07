@@ -325,7 +325,7 @@ async def cmd_start(message: Message):
         global _owner_user_id
         _owner_user_id = user.id
         log.info("Запомнен user_id владельца: %s", user.id)
-    await message.reply(help_text(), disable_web_page_preview=True, quote=True)
+    await message.answer(help_text(), disable_web_page_preview=True)
 
 
 # ---------- Команды групповой модерации ----------
