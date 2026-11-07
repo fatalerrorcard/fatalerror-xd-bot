@@ -1,20 +1,53 @@
-"""Антиспам / флуд-контроль и приветствие для новых участников."""
+"""Антиспам / флуд-контроль, автобан за рекламу и приветствие для новых участников."""
 
 from __future__ import annotations
 
+import re
 import time
 from collections import defaultdict
 
 from aiogram import Bot, Router, types
 from aiogram.filters import Command
 
+import settings
 from config import config
-from moderation import mute_user
+from moderation import ban_user, mute_user
 
 router = Router(name="antispam")
 
 # user_id -> list[timestamps]
 _flood: dict[int, list[float]] = defaultdict(list)
+
+# Проверка на рекламу: сторонние каналы/чаты, биржи ссылок, рекламные маркеры.
+# Используется только при включённом автобане (настройка чата /adban on).
+_AD_LINK = re.compile(
+    r"(?:t(?:elegram)?\.me/|t(?:elegram)?\.org/|vk\.com/|"
+    r"https?://|www\.)(?!/bot|/addstickers)[\w\-./?=%@+&#]+",
+    re.I,
+)
+_AD_TOKEN = re.compile(
+    r"(?:канал|чат|группа|подпишись|подписка|зайди|заходи|перейди|"
+    r"переходи|лотерея|розыгрыш|бесплатно|бонус|заработ(?:ок|ай)|"
+    r"раскрут|реклам|баннер|спам)\b[\w\s\-@.]{0,40}",
+    re.I,
+)
+
+
+def is_advertising(text: str) -> bool:
+    """Эвристика: считаем сообщение рекламным."""
+    if not text:
+        return False
+    low = text.lower()
+    # ссылки на сторонние telegram-каналы/чаты и приглашения — обычно реклама
+    if re.search(
+        r"t(?:elegram)?\.(?:me|org)/(?!bot|addstickers)(?:\+[\w-]+|[\w@]{3,}(?:/joinchat)?)",
+        low,
+    ):
+        return True
+    # сторонняя ссылка + рекламный маркер рядом
+    if _AD_LINK.search(text) and _AD_TOKEN.search(low):
+        return True
+    return False
 
 
 def _is_flood(user_id: int) -> bool:
@@ -91,3 +124,43 @@ async def welcome_new_member(message: types.Message):
         except Exception:
             text = config.welcome_text.replace("{name}", name)
             await message.answer(text, disable_web_page_preview=True)
+
+
+@router.message()
+async def auto_ban_advertising(message: types.Message):
+    """Автобан за рекламу: работает только в группах, где включён /adban on."""
+    chat = message.chat
+    if chat.type in ("private", "channel"):
+        return
+    if not settings.adban_enabled(chat.id):
+        return
+    user = message.from_user
+    if not user or user.is_bot:
+        return
+    text = message.text or message.caption or ""
+    if not is_advertising(text):
+        return
+    # админов не баним
+    try:
+        member = await message.bot.get_chat_member(chat.id, user.id)
+        if member.status in ("administrator", "creator"):
+            return
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        await ban_user(message.bot, chat.id, user.id)
+        details = f"{user.full_name or '?'}"
+        if user.username:
+            details += f" (@{user.username})"
+        details += f" [id:{user.id}]"
+        await message.answer(
+            f"Система: реклама запрещена. {details} забанен автоматически.",
+            disable_web_page_preview=True,
+        )
+        import actionlog
+
+        await actionlog.log_action(
+            message.bot, chat.id, "АВТОБАН", f"{details} · источник: авто"
+        )
+    except Exception:  # noqa: BLE001
+        pass
