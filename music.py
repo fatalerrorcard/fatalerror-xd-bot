@@ -2,18 +2,16 @@
 
 Бот сам генерирует короткие праздничные наигрыши в WAV и присылает их
 как аудиофайлы. Композиции собственные, записей чужих треков нет.
+Используется только стандартная библиотека Python (numpy не нужен).
 """
 
 from __future__ import annotations
 
+import array
 import io
 import math
-import os
 import random
-import tempfile
 import wave
-
-import numpy as np
 
 from aiogram import F, Router, types
 from aiogram.filters import Command
@@ -63,35 +61,44 @@ MELODIES = {
 
 def _note_to_samples(freq, dur, sr, bell=False):
     n = int(sr * dur)
-    t = np.arange(n) / sr
+    if n <= 0:
+        return []
     attack = min(int(sr * 0.02), n)
     release = min(int(sr * 0.08), n)
-    env = np.ones(n)
-    env[:attack] = np.linspace(0, 1, attack) if attack else np.array([])
-    env[n - release:] = np.linspace(1, 0, release) if release else np.array([])
 
-    if bell:
-        # колокольчиковый тембр: основной тон + сильные обертоны
-        sig = (
-            np.sin(2 * math.pi * freq * t)
-            + 0.55 * np.sin(2 * math.pi * freq * 2.01 * t)
-            + 0.30 * np.sin(2 * math.pi * freq * 3.02 * t)
-            + 0.12 * np.sin(2 * math.pi * freq * 4.05 * t)
-        )
-        sig /= 1.97
-        decay = np.exp(-t * 2.4)
-        return (sig * env * decay * 0.5).astype(np.float64)
-    return (np.sin(2 * math.pi * freq * t) * env * 0.5).astype(np.float64)
+    out = []
+    two_pi = 2.0 * math.pi
+    for i in range(n):
+        t = i / sr
+        # огибающая: плавный вход и выход
+        if i < attack:
+            env = i / attack
+        elif i >= n - release:
+            env = (n - 1 - i) / release
+        else:
+            env = 1.0
+        if bell:
+            # колокольчиковый тембр: основной тон + сильные обертоны
+            sig = (
+                math.sin(two_pi * freq * t)
+                + 0.55 * math.sin(two_pi * freq * 2.01 * t)
+                + 0.30 * math.sin(two_pi * freq * 3.02 * t)
+                + 0.12 * math.sin(two_pi * freq * 4.05 * t)
+            ) / 1.97
+            sig *= math.exp(-t * 2.4)
+        else:
+            sig = math.sin(two_pi * freq * t)
+        out.append(sig * env * 0.5)
+    return out
 
 
 def _synthesize(key: str) -> bytes:
     mel = MELODIES[key]
-    tempo = mel["tempo"]
-    beat = 60.0 / tempo
+    beat = 60.0 / mel["tempo"]
     bell = key == "bells"
 
     total = int(SR * 14.0)
-    mix = np.zeros(total, dtype=np.float64)
+    mix = [0.0] * total
 
     t = 0.0
     note_i = 0
@@ -100,33 +107,47 @@ def _synthesize(key: str) -> bytes:
         dur = ln * beat * 1.25  # небольшая растяжка для воздуха
         seg = _note_to_samples(freq, dur, SR, bell=bell)
         i0 = int(t * SR)
-        end = min(i0 + len(seg), total)
-        mix[i0:end] += seg[: end - i0]
+        for j in range(min(len(seg), total - i0)):
+            mix[i0 + j] += seg[j]
         t += (ln + 0.10) * beat * 0.92
         note_i += 1
 
     # лёгкий шум снега
-    rng = np.random.default_rng(42)
-    noise = rng.normal(0, 1, total) * 0.006
-    mix += noise
+    rng = random.Random(42)
+    for i in range(total):
+        mix[i] += rng.gauss(0.0, 1.0) * 0.006
 
+    # фейд в начале и в конце
     fade = int(SR * 1.2)
-    mix[: min(fade, total)] *= np.linspace(0, 1, min(fade, total))
-    mix[-min(fade, total):] *= np.linspace(1, 0, min(fade, total))
+    for i in range(min(fade, total)):
+        mix[i] *= i / fade
+        mix[total - 1 - i] *= i / fade
 
-    mix /= (np.max(np.abs(mix)) + 1e-9)
+    # нормализация
+    peak = 0.0
+    for v in mix:
+        av = abs(v)
+        if av > peak:
+            peak = av
+    norm = 32000.0 / (peak + 1e-9)
 
-    # переводим в стерео
-    l = mix * 0.9
-    r = mix * 0.9
-    pcm16 = (np.stack([l, r], axis=1) * 32000).astype(np.int16)
+    # стерео PCM16
+    pcm = array.array("h")
+    for v in mix:
+        s = int(v * norm * 0.9)
+        if s > 32767:
+            s = 32767
+        elif s < -32768:
+            s = -32768
+        pcm.append(s)
+        pcm.append(s)
 
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wf:
         wf.setnchannels(2)
         wf.setsampwidth(2)
         wf.setframerate(SR)
-        wf.writeframes(pcm16.tobytes())
+        wf.writeframes(pcm.tobytes())
     return buf.getvalue()
 
 
