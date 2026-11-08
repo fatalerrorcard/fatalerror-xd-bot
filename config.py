@@ -85,8 +85,10 @@ class Config:
     save_to_disk: str = os.getenv("SAVE_TO_DISK", "")
 
     # Каталог состояния (ranks.json, warns.json, stats.json, settings.json).
-    # На хостинге с постоянным диском укажите путь к volume.
-    state_dir: str = os.getenv("STATE_DIR", "")
+    # STATE_DIR — если задан (volume на хостинге). Иначе берём DATA_DIR:
+    # Bothost задаёт DATA_DIR=/app/data как место для постоянных данных.
+    # Если оба пусты — данные живут рядом с кодом (могут теряться при пересборке).
+    state_dir: str = os.getenv("STATE_DIR") or os.getenv("DATA_DIR", "")
 
 
 config = Config()
