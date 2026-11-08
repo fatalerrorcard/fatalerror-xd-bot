@@ -130,10 +130,11 @@ async def welcome_new_member(message: types.Message):
                 pass
             try:
                 await ban_user(message.bot, message.chat.id, member.id)
-                await message.answer(
-                    f"Система: антирейд. Новичок {member.full_name} забанен.",
-                    disable_web_page_preview=True,
-                )
+                if int(member.id) != me.id:
+                    await message.answer(
+                        f"Система: антирейд. Новичок {member.full_name} забанен.",
+                        disable_web_page_preview=True,
+                    )
                 import actionlog
 
                 await actionlog.log_action(
@@ -142,8 +143,14 @@ async def welcome_new_member(message: types.Message):
                     "АНТИРЕЙД",
                     f"{member.full_name or '?'} [id:{member.id}] · авто-бан новичка",
                 )
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as e:  # noqa: BLE001
+                try:
+                    await message.answer(
+                        f"Система: антирейд не смог забанить {member.full_name}: {e}",
+                        disable_web_page_preview=True,
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
         return
 
     if not config.welcome_enabled:
