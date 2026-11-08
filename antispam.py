@@ -111,49 +111,7 @@ async def welcome_new_member(message: types.Message):
     if message.chat.type == "private":
         return
     new = message.new_chat_members
-    if not new:
-        return
-
-    # Антирейд: если включён, баним всех новых (кроме админов и ботов-админов).
-    if settings.antiraid_enabled(message.chat.id):
-        for member in new:
-            if member.is_bot:
-                continue
-            try:
-                me = await message.bot.get_me()
-                if member.id == me.id:
-                    continue
-                mem = await message.bot.get_chat_member(message.chat.id, member.id)
-                if mem.status in ("administrator", "creator"):
-                    continue
-            except Exception:  # noqa: BLE001
-                pass
-            try:
-                await ban_user(message.bot, message.chat.id, member.id)
-                if int(member.id) != me.id:
-                    await message.answer(
-                        f"Система: антирейд. Новичок {member.full_name} забанен.",
-                        disable_web_page_preview=True,
-                    )
-                import actionlog
-
-                await actionlog.log_action(
-                    message.bot,
-                    message.chat.id,
-                    "АНТИРЕЙД",
-                    f"{member.full_name or '?'} [id:{member.id}] · авто-бан новичка",
-                )
-            except Exception as e:  # noqa: BLE001
-                try:
-                    await message.answer(
-                        f"Система: антирейд не смог забанить {member.full_name}: {e}",
-                        disable_web_page_preview=True,
-                    )
-                except Exception:  # noqa: BLE001
-                    pass
-        return
-
-    if not config.welcome_enabled:
+    if not new or not config.welcome_enabled:
         return
     for member in new:
         if member.is_bot:
