@@ -285,10 +285,6 @@ def help_text() -> str:
         "  автобан вкл / автобан выкл — защита от рекламных ссылок\n"
         "  (банит автоматически; по умолчанию выключено, включите в чате)\n"
         "\n"
-        "АНТИРЕЙД:\n"
-        "  антирейд вкл — банить всех новых участников (защита от набега)\n"
-        "  антирейд выкл — пустить новичков обратно\n"
-        "\n"
         "ЖАЛОБЫ:\n"
         "  жалоба (ответом) — карточка с кнопками для админов\n"
         "  жалоба спам — жалоба с причиной\n"
@@ -937,35 +933,6 @@ async def cmd_adban(message: Message):
     await message.reply("Формат: /adban on или /adban off")
 
 
-# ---------- Антирейд ----------
-
-@router.message(Command("antiraid"))
-async def cmd_antiraid(message: Message):
-    if not await _require(message, "assign_moderator"):
-        return
-    parts = (message.text or "").split(maxsplit=1)
-    arg = parts[1].strip().lower() if len(parts) > 1 else ""
-    if not arg:
-        state = "включён" if settings.antiraid_enabled(message.chat.id) else "выключен"
-        return await message.reply(
-            f"Антирейд: {state}\n"
-            "Включить: /antiraid on (или алиас «антирейд вкл»)\n"
-            "Выключить: /antiraid off (или алиас «антирейд выкл»)"
-        )
-    if arg in ("on", "вкл", "включить", "да", "1"):
-        settings.set_antiraid(message.chat.id, True)
-        await message.reply(
-            "Антирейд включён. Новые участники будут баниться автоматически "
-            "до выключения."
-        )
-        return
-    if arg in ("off", "выкл", "выключить", "нет", "0"):
-        settings.set_antiraid(message.chat.id, False)
-        await message.reply("Антирейд выключен. Новые участники проходят.")
-        return
-    await message.reply("Формат: /antiraid on или /antiraid off")
-
-
 # ---------- Репутация ----------
 
 def _member_name(user) -> str:
@@ -1523,10 +1490,6 @@ _RU_COMMANDS: list[tuple[re.Pattern[str], object]] = [
         re.compile(r"^(автобан|адбан)(\s+(вкл|выкл|on|off|включить|выключить|да|нет|1|0))?$", re.I),
         cmd_adban,
     ),
-    (
-        re.compile(r"^(антирейд|анти рейд)(\s+(вкл|выкл|on|off|включить|выключить|да|нет|1|0))?$", re.I),
-        cmd_antiraid,
-    ),
     (re.compile(r"^(чаты|мои чаты|список чатов|chats)$", re.I), cmd_chats),
     (
         re.compile(r"^(объявление|рассылка|announce)(\s+.+)?$", re.I),
@@ -1603,7 +1566,6 @@ BOT_COMMANDS = [
     BotCommand(command="forecast", description="Предсказание на новый год"),
     BotCommand(command="advent", description="Адвент-календарь (1–31 декабря)"),
     BotCommand(command="countdown", description="Таймер до Нового года"),
-    BotCommand(command="antiraid", description="Антирейд: on/off"),
 ]
 
 
