@@ -51,11 +51,3 @@ def adban_enabled(chat_id: int) -> bool:
 
 def set_adban(chat_id: int, enabled: bool) -> None:
     set_value("adban", chat_id, bool(enabled))
-
-
-def antiraid_enabled(chat_id: int) -> bool:
-    return bool(get("antiraid", chat_id, False))
-
-
-def set_antiraid(chat_id: int, enabled: bool) -> None:
-    set_value("antiraid", chat_id, bool(enabled))
