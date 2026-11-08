@@ -19,9 +19,6 @@ from aiogram.types import BotCommand, Message
 import actionlog
 import antispam
 import chatbook
-import games
-import music
-import newyear
 import ranks
 import reputation
 import settings
@@ -304,15 +301,6 @@ def help_text() -> str:
         "  журнал @канал — привязать журнал (младший админ)\n"
         "  /id — ваш ID и ID чата\n"
         "  помощь / команды — эта справка\n"
-        "\n"
-        "НОВОГОДНИЕ РАЗВЛЕЧЕНИЯ:\n"
-        "  адвент — открыть окошко адвент-календаря (1–31 декабря)\n"
-        "  до нового года — таймер: дни, часы, минуты, секунды\n"
-        "  крестики — сыграть в крестики-нолики с ботом\n"
-        "  число — угадать число от 1 до 100\n"
-        "  викторина — новогодняя викторина из 5 вопросов\n"
-        "  музыка — выбрать новогоднюю мелодию (собственный синтез)\n"
-        "  предсказание — предсказание на новый год\n"
         "\n"
         "КОНСОЛЬ ВЛАДЕЛЬЦА (только в личке бота):\n"
         "  чаты — список групп и каналов, где состоит бот\n"
@@ -1495,15 +1483,6 @@ _RU_COMMANDS: list[tuple[re.Pattern[str], object]] = [
         re.compile(r"^(объявление|рассылка|announce)(\s+.+)?$", re.I),
         cmd_announce,
     ),
-    (re.compile(r"^(крестики|нолики|крестики нолики|ttt)$", re.I), games.cmd_ttt),
-    (re.compile(r"^(число|угадай число|игра число)$", re.I), games.cmd_guess),
-    (re.compile(r"^б\s+(\d+)$", re.I), games.cmd_bet),
-    (re.compile(r"^(викторина|квиз|quiz)$", re.I), games.cmd_quiz),
-    (re.compile(r"^(музыка|мелодия|новогодняя музыка)$", re.I), music.cmd_music),
-    (
-        re.compile(r"^(предсказание|гадание|предскажи)$", re.I),
-        games.cmd_forecast,
-    ),
     (re.compile(r"^(помощь|команды|справка|help)$", re.I), cmd_start),
 ]
 
@@ -1559,13 +1538,6 @@ BOT_COMMANDS = [
     BotCommand(command="chats", description="Мои чаты (консоль владельца)"),
     BotCommand(command="announce", description="Рассылка объявления"),
     BotCommand(command="id", description="Мой ID и ID чата"),
-    BotCommand(command="ttt", description="Крестики-нолики с ботом"),
-    BotCommand(command="guess", description="Угадай число от 1 до 100"),
-    BotCommand(command="quiz", description="Новогодняя викторина"),
-    BotCommand(command="music", description="Новогодние мелодии"),
-    BotCommand(command="forecast", description="Предсказание на новый год"),
-    BotCommand(command="advent", description="Адвент-календарь (1–31 декабря)"),
-    BotCommand(command="countdown", description="Таймер до Нового года"),
 ]
 
 
@@ -1575,9 +1547,6 @@ async def main():
 
     dp.include_router(stats.router)
     dp.include_router(router)
-    dp.include_router(games.router)
-    dp.include_router(music.router)
-    dp.include_router(newyear.router)
     dp.include_router(antispam.router)
     await bot.delete_webhook(drop_pending_updates=True)
     try:
