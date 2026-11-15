@@ -17,6 +17,7 @@ from aiogram.filters import Command
 from aiogram.types import BotCommand, Message
 
 import actionlog
+import actions
 import antispam
 import chatbook
 import ranks
@@ -301,6 +302,11 @@ def help_text() -> str:
         "  журнал @канал — привязать журнал (младший админ)\n"
         "  /id — ваш ID и ID чата\n"
         "  помощь / команды — эта справка\n"
+        "\n"
+        "ДЕЙСТВИЯ (ответом на сообщение или с @юзером):\n"
+        "  обнять · поцеловать · погладить — нежные команды 🤗\n"
+        "  ударить · убить · воскресить — боевые 💥\n"
+        "  выебать — для самых смелых 😏\n"
         "\n"
         "КОНСОЛЬ ВЛАДЕЛЬЦА (только в личке бота):\n"
         "  чаты — список групп и каналов, где состоит бот\n"
@@ -1547,6 +1553,7 @@ async def main():
 
     dp.include_router(stats.router)
     dp.include_router(router)
+    dp.include_router(actions.router)
     dp.include_router(antispam.router)
     await bot.delete_webhook(drop_pending_updates=True)
     try:
