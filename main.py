@@ -1552,8 +1552,8 @@ async def main():
     dp.message.outer_middleware(stats.StatsMiddleware())
 
     dp.include_router(stats.router)
-    dp.include_router(router)
     dp.include_router(actions.router)
+    dp.include_router(router)
     dp.include_router(antispam.router)
     await bot.delete_webhook(drop_pending_updates=True)
     try:
