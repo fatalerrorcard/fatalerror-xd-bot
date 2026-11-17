@@ -1132,12 +1132,29 @@ async def cmd_chats(message: Message):
             "и пришлите ему туда любое сообщение — бот запомнит чат."
         )
 
+    # Отфильтровываем чаты, где бота больше нет (удалённые, исключённые)
+    try:
+        alive = await chatbook.alive_targets(message.bot, targets)
+    except Exception as e:  # noqa: BLE001
+        log.warning("Не удалось проверить чаты: %s", e)
+        alive = targets
+
+    dead_count = len(targets) - len(alive)
+    if not alive:
+        return await message.reply(
+            "Сохранённых чатов: %d, но ни один сейчас недоступен "
+            "(удалены или бот исключён)." % len(targets)
+        )
+
     kind = {"group": "группа", "supergroup": "группа", "channel": "канал"}
-    lines = [f"Известно чатов: {len(targets)}", ""]
-    for t in targets:
+    lines = [f"Доступных чатов: {len(alive)}", ""]
+    for t in alive:
         whom = f"{kind.get(t['type'], t['type'])} {t['id']}"
         title = t.get("title") or ""
         lines.append(f"• {whom}" + (f" — {title}" if title else ""))
+    if dead_count:
+        lines.append("")
+        lines.append(f"(недоступно/удалено: {dead_count})")
     lines.append("")
     lines.append("Рассылка: объявление <текст>")
     await message.reply("\n".join(lines))
