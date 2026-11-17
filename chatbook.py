@@ -59,3 +59,20 @@ def announce_targets() -> list[dict]:
             }
         )
     return result
+
+
+async def alive_targets(bot, targets: list[dict]) -> list[dict]:
+    """Оставляет из targets только чаты, где бот реально состоит.
+
+    Проверяет каждый чат через get_chat: если чат удалён, бот исключён
+    из чата или у бота нет доступа — get_chat бросит исключение,
+    и такой чат отбрасывается из списка.
+    """
+    result = []
+    for t in targets:
+        try:
+            await bot.get_chat(t["id"])
+            result.append(t)
+        except Exception:  # noqa: BLE001
+            continue
+    return result
