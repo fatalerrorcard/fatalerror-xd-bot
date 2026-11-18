@@ -42,6 +42,17 @@ def known_chats() -> dict:
     return _load()
 
 
+def forget(chat_id: int) -> bool:
+    """Удалить чат из справочника. Возвращает True, если чат был известен."""
+    data = _load()
+    key = str(chat_id)
+    existed = key in data
+    if existed:
+        del data[key]
+        _save(data)
+    return existed
+
+
 def announce_targets() -> list[dict]:
     """Чаты, куда можно рассылать объявления: группы, супергруппы, каналы."""
     result = []
