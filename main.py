@@ -1157,7 +1157,112 @@ async def cmd_chats(message: Message):
         lines.append(f"(недоступно/удалено: {dead_count})")
     lines.append("")
     lines.append("Рассылка: объявление <текст>")
-    await message.reply("\n".join(lines))
+
+    if len(alive) <= 12:
+        kb = types.InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    types.InlineKeyboardButton(
+                        text=f"Выкинуть: {t.get('title') or t['id']}",
+                        callback_data=f"kickchat:{t['id']}",
+                    )
+                ]
+                for t in alive
+            ]
+        )
+        lines.append("")
+        lines.append("Выбери чат, чтобы принудительно выгнать бота:")
+        await message.reply("\n".join(lines), reply_markup=kb)
+    else:
+        lines.append("")
+        lines.append("Выгнать бота из чата: /kickchat <id или @username>")
+        await message.reply("\n".join(lines))
+
+
+@router.message(Command("kickchat"))
+async def cmd_kickchat(message: Message):
+    if not await _is_owner(message):
+        return await message.reply("Нет прав: консоль доступна владельцу.")
+    if message.chat.type != "private":
+        return await message.reply("Лучше делать это из лички бота.")
+
+    parts = (message.text or "").split(maxsplit=1)
+    raw = parts[1].strip() if len(parts) > 1 else ""
+    if not raw:
+        return await message.reply(
+            "Формат: /kickchat <id или @username> — бот напишет в чат "
+            "«сори босс не хочет что бы я был с вами» и выйдет из него."
+        )
+
+    chat_id = raw
+    try:
+        chat_id = int(raw)
+    except ValueError:
+        if raw.startswith("@"):
+            raw = raw[1:]
+        try:
+            chat = await bot.get_chat(raw)
+            chat_id = chat.id
+        except Exception as e:  # noqa: BLE001
+            return await message.reply(f"Не нашёл чат {raw}: {e}")
+
+    await _kick_bot_from_chat(message, chat_id)
+
+
+async def _kick_bot_from_chat(message: Message, chat_id: int):
+    """Принудительно выводит бота из чата с прощальным сообщением."""
+    try:
+        await bot.send_message(
+            chat_id, "сори босс не хочет что бы я был с вами"
+        )
+    except Exception as e:  # noqa: BLE001
+        log.warning("Не удалось отправить прощание в %s: %s", chat_id, e)
+
+    try:
+        await bot.leave_chat(chat_id)
+        leaved = True
+    except Exception as e:  # noqa: BLE001
+        leaved = False
+        log.warning("Не удалось выйти из %s: %s", chat_id, e)
+
+    chatbook.forget(chat_id)
+
+    if leaved:
+        await message.reply(f"Бот вышел из чата {chat_id}. Чат убран из списка.")
+    else:
+        await message.reply(
+            f"Бот не смог выйти из {chat_id} (нет доступа или чат удалён). Чат убран из списка."
+        )
+
+
+@router.callback_query(F.data.startswith("kickchat:"))
+async def on_kickchat(cb: types.CallbackQuery):
+    actor = cb.from_user
+    owner_id = getattr(config, "owner_username", None)
+    is_owner = (
+        actor.username
+        and owner_id
+        and actor.username.lower() == config.owner_username
+    )
+    if not is_owner and actor.id not in OWNERS:
+        return await cb.answer("Нет прав", show_alert=True)
+    raw = (cb.data or "").split(":", 1)[1] if ":" in (cb.data or "") else ""
+    try:
+        chat_id = int(raw)
+    except ValueError:
+        return await cb.answer("Некорректный чат", show_alert=True)
+
+    await cb.answer("Выгоняю…")
+    try:
+        await cb.message.edit_text(
+            f"{cb.message.text or ''}\n\n→ Выгоняю бота из {chat_id}…",
+            reply_markup=None,
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+    # Переиспользуем ту же логику, что и в /kickchat
+    await _kick_bot_from_chat(cb.message, chat_id)
 
 
 @router.message(Command("announce"))
@@ -1503,6 +1608,10 @@ _RU_COMMANDS: list[tuple[re.Pattern[str], object]] = [
     ),
     (re.compile(r"^(чаты|мои чаты|список чатов|chats)$", re.I), cmd_chats),
     (
+        re.compile(r"^(выкинь из чата|выгнать бота|выход из чата|kickchat)(\s+.+)?$", re.I),
+        cmd_kickchat,
+    ),
+    (
         re.compile(r"^(объявление|рассылка|announce)(\s+.+)?$", re.I),
         cmd_announce,
     ),
@@ -1559,6 +1668,7 @@ BOT_COMMANDS = [
     BotCommand(command="setlog", description="Привязать журнал действий"),
     BotCommand(command="adban", description="Автобан за рекламу: on/off"),
     BotCommand(command="chats", description="Мои чаты (консоль владельца)"),
+    BotCommand(command="kickchat", description="Выгнать бота из чата: /kickchat <id>"),
     BotCommand(command="announce", description="Рассылка объявления"),
     BotCommand(command="id", description="Мой ID и ID чата"),
 ]
